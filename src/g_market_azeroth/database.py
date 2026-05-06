@@ -13,6 +13,7 @@ from g_market_azeroth.repositories.requests import (
     RequestsRepository,
     SellRequestDetails,
 )
+from g_market_azeroth.repositories.support import SupportMessage, SupportRepository, SupportTicket
 from g_market_azeroth.services.products import ProductService
 
 
@@ -28,23 +29,6 @@ class Client:
     created_at: str
     updated_at: str
     last_seen_at: str
-
-
-@dataclass(frozen=True)
-class SupportTicket:
-    id: int
-    telegram_id: int
-    status: str
-    question: str
-    answer: str | None
-    admin_id: int | None
-    created_at: str
-    updated_at: str
-    answered_at: str | None
-    closed_at: str | None
-    client_username: str | None = None
-    client_first_name: str | None = None
-    client_last_name: str | None = None
 
 
 class MarketRepository:
@@ -271,6 +255,25 @@ class MarketRepository:
     async def close_support_ticket(self, *, ticket_id: int, admin_id: int) -> SupportTicket | None:
         return await asyncio.to_thread(self._close_support_ticket_sync, ticket_id, admin_id)
 
+    async def add_support_message(
+        self,
+        *,
+        ticket_id: int,
+        sender_type: str,
+        sender_id: int,
+        message: str,
+    ) -> SupportMessage:
+        return await asyncio.to_thread(
+            self._add_support_message_sync,
+            ticket_id,
+            sender_type,
+            sender_id,
+            message,
+        )
+
+    async def list_support_messages(self, ticket_id: int) -> list[SupportMessage]:
+        return await asyncio.to_thread(self._list_support_messages_sync, ticket_id)
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path)
         connection.row_factory = sqlite3.Row
@@ -393,34 +396,7 @@ class MarketRepository:
         )
 
     def _create_support_tickets_table(self, connection: sqlite3.Connection) -> None:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS support_tickets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'new',
-                question TEXT NOT NULL,
-                answer TEXT,
-                admin_id INTEGER,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                answered_at TEXT,
-                closed_at TEXT
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_support_tickets_created_at
-            ON support_tickets(created_at DESC)
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_support_tickets_telegram_id
-            ON support_tickets(telegram_id, created_at DESC)
-            """
-        )
+        SupportRepository(connection).init_schema()
 
     def _ensure_columns(
         self,
@@ -674,40 +650,21 @@ class MarketRepository:
 
     def _create_support_ticket_sync(self, telegram_id: int, question: str) -> SupportTicket:
         with closing(self._connect()) as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO support_tickets (telegram_id, question)
-                VALUES (?, ?)
-                """,
-                (telegram_id, question),
+            ticket = SupportRepository(connection).create_ticket(
+                telegram_id=telegram_id,
+                question=question,
             )
-            ticket_id = int(cursor.lastrowid)
-            row = self._select_support_tickets(connection, ticket_id=ticket_id).fetchone()
             connection.commit()
 
-        return _support_ticket_from_row(row)
+        return ticket
 
     def _count_support_tickets_sync(self, status: str | None = None) -> int:
         with closing(self._connect()) as connection:
-            if status:
-                row = connection.execute(
-                    """
-                    SELECT COUNT(*) AS count
-                    FROM support_tickets
-                    WHERE status = ?
-                    """,
-                    (status,),
-                ).fetchone()
-            else:
-                row = connection.execute("SELECT COUNT(*) AS count FROM support_tickets").fetchone()
-
-        return int(row["count"])
+            return SupportRepository(connection).count_tickets(status)
 
     def _latest_support_tickets_sync(self, limit: int) -> list[SupportTicket]:
         with closing(self._connect()) as connection:
-            rows = self._select_support_tickets(connection, limit=limit).fetchall()
-
-        return [_support_ticket_from_row(row) for row in rows]
+            return SupportRepository(connection).latest_tickets(limit)
 
     def _latest_support_tickets_by_user_sync(
         self,
@@ -715,19 +672,14 @@ class MarketRepository:
         limit: int,
     ) -> list[SupportTicket]:
         with closing(self._connect()) as connection:
-            rows = self._select_support_tickets(
-                connection,
-                limit=limit,
+            return SupportRepository(connection).latest_tickets_by_user(
                 telegram_id=telegram_id,
-            ).fetchall()
-
-        return [_support_ticket_from_row(row) for row in rows]
+                limit=limit,
+            )
 
     def _get_support_ticket_sync(self, ticket_id: int) -> SupportTicket | None:
         with closing(self._connect()) as connection:
-            row = self._select_support_tickets(connection, ticket_id=ticket_id).fetchone()
-
-        return _support_ticket_from_row(row) if row else None
+            return SupportRepository(connection).get_ticket(ticket_id)
 
     def _answer_support_ticket_sync(
         self,
@@ -736,89 +688,46 @@ class MarketRepository:
         answer: str,
     ) -> SupportTicket | None:
         with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                UPDATE support_tickets
-                SET
-                    status = 'answered',
-                    answer = ?,
-                    admin_id = ?,
-                    answered_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (answer, admin_id, ticket_id),
+            ticket = SupportRepository(connection).answer_ticket(
+                ticket_id=ticket_id,
+                admin_id=admin_id,
+                answer=answer,
             )
-            row = self._select_support_tickets(connection, ticket_id=ticket_id).fetchone()
             connection.commit()
 
-        return _support_ticket_from_row(row) if row else None
+        return ticket
 
     def _close_support_ticket_sync(self, ticket_id: int, admin_id: int) -> SupportTicket | None:
         with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                UPDATE support_tickets
-                SET
-                    status = 'closed',
-                    admin_id = ?,
-                    closed_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (admin_id, ticket_id),
+            ticket = SupportRepository(connection).close_ticket(
+                ticket_id=ticket_id,
+                admin_id=admin_id,
             )
-            row = self._select_support_tickets(connection, ticket_id=ticket_id).fetchone()
             connection.commit()
 
-        return _support_ticket_from_row(row) if row else None
+        return ticket
 
-    def _select_support_tickets(
+    def _add_support_message_sync(
         self,
-        connection: sqlite3.Connection,
-        *,
-        limit: int | None = None,
-        ticket_id: int | None = None,
-        telegram_id: int | None = None,
-    ) -> sqlite3.Cursor:
-        where_parts: list[str] = []
-        params: list[int] = []
-        if ticket_id is not None:
-            where_parts.append("ticket.id = ?")
-            params.append(ticket_id)
-        if telegram_id is not None:
-            where_parts.append("ticket.telegram_id = ?")
-            params.append(telegram_id)
+        ticket_id: int,
+        sender_type: str,
+        sender_id: int,
+        message: str,
+    ) -> SupportMessage:
+        with closing(self._connect()) as connection:
+            support_message = SupportRepository(connection).add_support_message(
+                ticket_id=ticket_id,
+                sender_type=sender_type,
+                sender_id=sender_id,
+                message=message,
+            )
+            connection.commit()
 
-        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-        limit_sql = "LIMIT ?" if limit is not None else ""
-        if limit is not None:
-            params.append(limit)
+        return support_message
 
-        return connection.execute(
-            f"""
-            SELECT
-                ticket.id AS ticket_id,
-                ticket.telegram_id AS ticket_telegram_id,
-                ticket.status AS ticket_status,
-                ticket.question AS ticket_question,
-                ticket.answer AS ticket_answer,
-                ticket.admin_id AS ticket_admin_id,
-                ticket.created_at AS ticket_created_at,
-                ticket.updated_at AS ticket_updated_at,
-                ticket.answered_at AS ticket_answered_at,
-                ticket.closed_at AS ticket_closed_at,
-                client.username AS client_username,
-                client.first_name AS client_first_name,
-                client.last_name AS client_last_name
-            FROM support_tickets AS ticket
-            LEFT JOIN clients AS client ON client.telegram_id = ticket.telegram_id
-            {where_sql}
-            ORDER BY ticket.created_at DESC, ticket.id DESC
-            {limit_sql}
-            """,
-            params,
-        )
+    def _list_support_messages_sync(self, ticket_id: int) -> list[SupportMessage]:
+        with closing(self._connect()) as connection:
+            return SupportRepository(connection).list_support_messages(ticket_id)
 
 
 ClientRepository = MarketRepository
@@ -836,22 +745,4 @@ def _client_from_row(row: sqlite3.Row) -> Client:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         last_seen_at=row["last_seen_at"],
-    )
-
-
-def _support_ticket_from_row(row: sqlite3.Row) -> SupportTicket:
-    return SupportTicket(
-        id=int(row["ticket_id"]),
-        telegram_id=int(row["ticket_telegram_id"]),
-        status=row["ticket_status"],
-        question=row["ticket_question"],
-        answer=row["ticket_answer"],
-        admin_id=int(row["ticket_admin_id"]) if row["ticket_admin_id"] is not None else None,
-        created_at=row["ticket_created_at"],
-        updated_at=row["ticket_updated_at"],
-        answered_at=row["ticket_answered_at"],
-        closed_at=row["ticket_closed_at"],
-        client_username=row["client_username"],
-        client_first_name=row["client_first_name"],
-        client_last_name=row["client_last_name"],
     )

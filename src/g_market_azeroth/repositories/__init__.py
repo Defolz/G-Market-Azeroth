@@ -7,6 +7,7 @@ from g_market_azeroth.repositories.requests import (
     RequestsRepository,
     SellRequestDetails,
 )
+from g_market_azeroth.repositories.support import SupportMessage, SupportRepository, SupportTicket
 
 __all__ = [
     "Product",
@@ -15,4 +16,7 @@ __all__ = [
     "PurchaseRequestDetails",
     "RequestsRepository",
     "SellRequestDetails",
+    "SupportMessage",
+    "SupportRepository",
+    "SupportTicket",
 ]
