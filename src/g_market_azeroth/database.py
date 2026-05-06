@@ -6,6 +6,8 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
+from g_market_azeroth.repositories.products import Product, ProductsRepository
+
 
 @dataclass(frozen=True)
 class Client:
@@ -19,18 +21,6 @@ class Client:
     created_at: str
     updated_at: str
     last_seen_at: str
-
-
-@dataclass(frozen=True)
-class Product:
-    id: int
-    realm_type: str
-    server: str
-    side: str
-    price: str
-    is_active: bool
-    created_at: str
-    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -321,26 +311,7 @@ class MarketRepository:
         )
 
     def _create_products_table(self, connection: sqlite3.Connection) -> None:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                realm_type TEXT NOT NULL,
-                server TEXT NOT NULL,
-                side TEXT NOT NULL,
-                price TEXT NOT NULL,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_products_catalog
-            ON products(realm_type, server, side, is_active)
-            """
-        )
+        ProductsRepository(connection).init_schema()
 
     def _create_purchase_requests_table(self, connection: sqlite3.Connection) -> None:
         connection.execute(
@@ -540,118 +511,46 @@ class MarketRepository:
 
     def _add_product_sync(self, realm_type: str, server: str, side: str, price: str) -> Product:
         with closing(self._connect()) as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO products (realm_type, server, side, price)
-                VALUES (?, ?, ?, ?)
-                """,
-                (realm_type, server, side, price),
+            product = ProductsRepository(connection).create_product(
+                game_type=realm_type,
+                server=server,
+                faction=side,
+                price=price,
             )
-            product_id = int(cursor.lastrowid)
-            row = self._select_product(connection, product_id)
             connection.commit()
 
-        return _product_from_row(row)
+        return product
 
     def _count_products_sync(self) -> int:
         with closing(self._connect()) as connection:
-            row = connection.execute(
-                """
-                SELECT COUNT(*) AS count
-                FROM products
-                WHERE is_active = 1
-                """
-            ).fetchone()
-
-        return int(row["count"])
+            return ProductsRepository(connection).count_products()
 
     def _latest_products_sync(self, limit: int) -> list[Product]:
         with closing(self._connect()) as connection:
-            rows = connection.execute(
-                """
-                SELECT id, realm_type, server, side, price, is_active, created_at, updated_at
-                FROM products
-                WHERE is_active = 1
-                ORDER BY created_at DESC, id DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-
-        return [_product_from_row(row) for row in rows]
+            return ProductsRepository(connection).latest_products(limit)
 
     def _list_servers_sync(self, realm_type: str) -> list[str]:
         with closing(self._connect()) as connection:
-            rows = connection.execute(
-                """
-                SELECT DISTINCT server
-                FROM products
-                WHERE realm_type = ? AND is_active = 1
-                ORDER BY server COLLATE NOCASE
-                """,
-                (realm_type,),
-            ).fetchall()
-
-        return [str(row["server"]) for row in rows]
+            return ProductsRepository(connection).list_servers(realm_type)
 
     def _list_sides_sync(self, realm_type: str, server: str) -> list[str]:
         with closing(self._connect()) as connection:
-            rows = connection.execute(
-                """
-                SELECT DISTINCT side
-                FROM products
-                WHERE realm_type = ? AND server = ? AND is_active = 1
-                ORDER BY side COLLATE NOCASE
-                """,
-                (realm_type, server),
-            ).fetchall()
-
-        return [str(row["side"]) for row in rows]
+            return ProductsRepository(connection).list_sides(realm_type, server)
 
     def _list_products_sync(self, realm_type: str, server: str, side: str) -> list[Product]:
         with closing(self._connect()) as connection:
-            rows = connection.execute(
-                """
-                SELECT id, realm_type, server, side, price, is_active, created_at, updated_at
-                FROM products
-                WHERE realm_type = ? AND server = ? AND side = ? AND is_active = 1
-                ORDER BY created_at DESC, id DESC
-                """,
-                (realm_type, server, side),
-            ).fetchall()
-
-        return [_product_from_row(row) for row in rows]
+            return ProductsRepository(connection).list_products(realm_type, server, side)
 
     def _get_product_sync(self, product_id: int) -> Product | None:
         with closing(self._connect()) as connection:
-            row = self._select_product(connection, product_id)
-
-        return _product_from_row(row) if row else None
+            return ProductsRepository(connection).get_product(product_id)
 
     def _update_product_price_sync(self, product_id: int, price: str) -> Product | None:
         with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                UPDATE products
-                SET price = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND is_active = 1
-                """,
-                (price, product_id),
-            )
-            row = self._select_product(connection, product_id)
+            product = ProductsRepository(connection).update_price(product_id=product_id, price=price)
             connection.commit()
 
-        return _product_from_row(row) if row else None
-
-    def _select_product(self, connection: sqlite3.Connection, product_id: int) -> sqlite3.Row | None:
-        return connection.execute(
-            """
-            SELECT id, realm_type, server, side, price, is_active, created_at, updated_at
-            FROM products
-            WHERE id = ? AND is_active = 1
-            """,
-            (product_id,),
-        ).fetchone()
+        return product
 
     def _create_purchase_request_sync(self, product_id: int, telegram_id: int) -> PurchaseRequest:
         with closing(self._connect()) as connection:
@@ -1117,19 +1016,6 @@ def _client_from_row(row: sqlite3.Row) -> Client:
     )
 
 
-def _product_from_row(row: sqlite3.Row) -> Product:
-    return Product(
-        id=int(row["id"]),
-        realm_type=row["realm_type"],
-        server=row["server"],
-        side=row["side"],
-        price=row["price"],
-        is_active=bool(row["is_active"]),
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-    )
-
-
 def _purchase_request_from_row(row: sqlite3.Row) -> PurchaseRequest:
     return PurchaseRequest(
         id=int(row["id"]),
@@ -1146,9 +1032,9 @@ def _purchase_request_from_row(row: sqlite3.Row) -> PurchaseRequest:
 def _purchase_request_details_from_row(row: sqlite3.Row) -> PurchaseRequestDetails:
     product = Product(
         id=int(row["product_id"]),
-        realm_type=row["product_realm_type"],
+        game_type=row["product_realm_type"],
         server=row["product_server"],
-        side=row["product_side"],
+        faction=row["product_side"],
         price=row["product_price"],
         is_active=bool(row["product_is_active"]),
         created_at=row["product_created_at"],
