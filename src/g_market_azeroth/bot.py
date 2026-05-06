@@ -4,7 +4,7 @@ from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 
-from g_market_azeroth import admin, handlers
+from g_market_azeroth import admin, error_handlers, handlers
 from g_market_azeroth.config import load_settings
 from g_market_azeroth.database import MarketRepository
 
@@ -21,6 +21,7 @@ async def run_bot() -> None:
 
     bot = Bot(token=settings.bot_token)
     dispatcher = Dispatcher(settings=settings, database=database)
+    dispatcher.errors.register(error_handlers.handle_error)
     dispatcher.include_router(admin.router)
     dispatcher.include_router(handlers.router)
 
