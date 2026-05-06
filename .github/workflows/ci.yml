@@ -18,7 +18,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
 
       - name: Compile sources
         run: python -m compileall src
+
+      - name: Run tests
+        run: pytest
