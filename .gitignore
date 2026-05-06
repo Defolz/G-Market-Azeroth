@@ -1,12 +1,28 @@
+# Local environment
 .env
 .venv/
+
+# Python caches and build artifacts
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Node/Electron dependencies and logs
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+data/
+
+# IDE and OS files
 .idea/
 .vscode/
-dist/
-build/
-*.egg-info/
+.DS_Store
+Thumbs.db
