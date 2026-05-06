@@ -1,0 +1,721 @@
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
+
+from g_market_azeroth.catalog import (
+    REALM_TYPE_LABELS,
+    is_valid_realm_type,
+    realm_type_label,
+    request_status_label,
+    support_status_label,
+)
+from g_market_azeroth.config import Settings
+from g_market_azeroth.database import (
+    MarketRepository,
+    Product,
+    PurchaseRequest,
+    SellRequestDetails,
+    SupportTicket,
+)
+
+router = Router(name="client")
+
+
+WELCOME_TEXT = (
+    "Добро пожаловать в GoldExpress.\n\n"
+    "Мы помогаем игрокам World of Warcraft безопасно покупать и продавать золото. "
+    "Выберите нужное действие ниже."
+)
+
+
+class SellRequestFlow(StatesGroup):
+    waiting_for_realm_type = State()
+    waiting_for_server = State()
+    waiting_for_side = State()
+    waiting_for_amount = State()
+    waiting_for_price = State()
+    waiting_for_comment = State()
+
+
+class SupportFlow(StatesGroup):
+    waiting_for_question = State()
+
+
+@router.message(CommandStart())
+async def handle_start(message: Message, database: MarketRepository, state: FSMContext) -> None:
+    await state.clear()
+    if message.from_user:
+        await _save_client(message.from_user, database)
+
+    await message.answer(WELCOME_TEXT, reply_markup=main_menu_keyboard())
+
+
+@router.message(Command("menu"))
+async def handle_menu(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Главное меню:", reply_markup=main_menu_keyboard())
+
+
+@router.message(Command("support"))
+async def handle_support_command(message: Message, state: FSMContext) -> None:
+    await state.set_state(SupportFlow.waiting_for_question)
+    await message.answer(
+        "Опишите вопрос одним сообщением. Администратор ответит вам здесь.",
+        reply_markup=client_cancel_keyboard(),
+    )
+
+
+@router.message(Command("my_requests"))
+async def handle_my_requests_command(message: Message, database: MarketRepository) -> None:
+    if not message.from_user:
+        return
+
+    await message.answer(
+        await _my_requests_text(database, message.from_user.id),
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "shop:home")
+async def handle_shop_home(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text("Главное меню:", reply_markup=main_menu_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "shop:buy")
+async def handle_buy(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text("Выберите тип сервера:", reply_markup=buy_realm_type_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "shop:sell")
+async def handle_sell(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(SellRequestFlow.waiting_for_realm_type)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text("Что хотите продать?", reply_markup=sell_realm_type_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "shop:support")
+async def handle_support(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(SupportFlow.waiting_for_question)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "Опишите вопрос одним сообщением. Администратор ответит вам здесь.",
+            reply_markup=client_cancel_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "shop:my_requests")
+async def handle_my_requests(callback: CallbackQuery, database: MarketRepository) -> None:
+    text = await _my_requests_text(database, callback.from_user.id)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(text, reply_markup=main_menu_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("shop:realm:"))
+async def handle_realm_type(callback: CallbackQuery, database: MarketRepository) -> None:
+    realm_type = callback.data.rsplit(":", maxsplit=1)[-1] if callback.data else ""
+    if not is_valid_realm_type(realm_type):
+        await callback.answer("Неизвестный тип.", show_alert=True)
+        return
+
+    servers = await database.list_servers(realm_type)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _servers_text(realm_type, servers),
+            reply_markup=servers_keyboard(realm_type, servers),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("shop:server:"))
+async def handle_server(callback: CallbackQuery, database: MarketRepository) -> None:
+    parsed = _parse_catalog_index_callback(callback.data, expected_prefix="shop:server")
+    if not parsed:
+        await callback.answer("Не удалось открыть сервер.", show_alert=True)
+        return
+
+    realm_type, server_index = parsed
+    servers = await database.list_servers(realm_type)
+    if server_index >= len(servers):
+        await callback.answer("Сервер больше не доступен.", show_alert=True)
+        return
+
+    server = servers[server_index]
+    sides = await database.list_sides(realm_type, server)
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _sides_text(realm_type, server, sides),
+            reply_markup=sides_keyboard(realm_type, server_index, sides),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("shop:side:"))
+async def handle_side(callback: CallbackQuery, database: MarketRepository) -> None:
+    parsed = _parse_side_callback(callback.data)
+    if not parsed:
+        await callback.answer("Не удалось открыть сторону.", show_alert=True)
+        return
+
+    realm_type, server_index, side_index = parsed
+    servers = await database.list_servers(realm_type)
+    if server_index >= len(servers):
+        await callback.answer("Сервер больше не доступен.", show_alert=True)
+        return
+
+    server = servers[server_index]
+    sides = await database.list_sides(realm_type, server)
+    if side_index >= len(sides):
+        await callback.answer("Сторона больше не доступна.", show_alert=True)
+        return
+
+    side = sides[side_index]
+    products = await database.list_products(realm_type, server, side)
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _products_text(realm_type, server, side, products),
+            reply_markup=products_keyboard(products, realm_type, server_index),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("shop:purchase:"))
+async def handle_purchase(
+    callback: CallbackQuery,
+    bot: Bot,
+    settings: Settings,
+    database: MarketRepository,
+) -> None:
+    product_id = _parse_product_id(callback.data)
+    if product_id is None:
+        await callback.answer("Не удалось создать заявку.", show_alert=True)
+        return
+
+    product = await database.get_product(product_id)
+    if product is None:
+        await callback.answer("Товар больше не доступен.", show_alert=True)
+        return
+
+    request = await database.create_purchase_request(
+        product_id=product.id,
+        telegram_id=callback.from_user.id,
+    )
+    await _notify_admins_about_purchase(bot, settings, request, product, callback.from_user)
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "Заявка на покупку создана.\n\n"
+            f"Номер заявки: #{request.id}\n"
+            "Администратор увидит её и свяжется с вами.",
+            reply_markup=main_menu_keyboard(),
+        )
+    await callback.answer("Заявка создана.")
+
+
+@router.callback_query(SellRequestFlow.waiting_for_realm_type, F.data.startswith("sell:realm:"))
+async def handle_sell_realm_type(callback: CallbackQuery, state: FSMContext) -> None:
+    realm_type = callback.data.rsplit(":", maxsplit=1)[-1] if callback.data else ""
+    if not is_valid_realm_type(realm_type):
+        await callback.answer("Неизвестный тип.", show_alert=True)
+        return
+
+    await state.update_data(realm_type=realm_type)
+    await state.set_state(SellRequestFlow.waiting_for_server)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            f"Тип: {realm_type_label(realm_type)}\n\nВведите сервер:",
+            reply_markup=client_cancel_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.message(SellRequestFlow.waiting_for_server)
+async def handle_sell_server(message: Message, state: FSMContext) -> None:
+    server = _clean_text(message.text)
+    if not server:
+        await message.answer("Введите сервер текстом.")
+        return
+
+    await state.update_data(server=server)
+    await state.set_state(SellRequestFlow.waiting_for_side)
+    await message.answer("Введите сторону:", reply_markup=client_cancel_keyboard())
+
+
+@router.message(SellRequestFlow.waiting_for_side)
+async def handle_sell_side(message: Message, state: FSMContext) -> None:
+    side = _clean_text(message.text)
+    if not side:
+        await message.answer("Введите сторону текстом.")
+        return
+
+    await state.update_data(side=side)
+    await state.set_state(SellRequestFlow.waiting_for_amount)
+    await message.answer("Введите количество золота:", reply_markup=client_cancel_keyboard())
+
+
+@router.message(SellRequestFlow.waiting_for_amount)
+async def handle_sell_amount(message: Message, state: FSMContext) -> None:
+    amount = _clean_text(message.text)
+    if not amount:
+        await message.answer("Введите количество текстом или числом.")
+        return
+
+    await state.update_data(amount=amount)
+    await state.set_state(SellRequestFlow.waiting_for_price)
+    await message.answer("Введите желаемую цену:", reply_markup=client_cancel_keyboard())
+
+
+@router.message(SellRequestFlow.waiting_for_price)
+async def handle_sell_price(message: Message, state: FSMContext) -> None:
+    price = _clean_text(message.text)
+    if not price:
+        await message.answer("Введите цену текстом или числом.")
+        return
+
+    await state.update_data(price=price)
+    await state.set_state(SellRequestFlow.waiting_for_comment)
+    await message.answer(
+        "Добавьте комментарий или напишите `-`, если комментарий не нужен.",
+        reply_markup=client_cancel_keyboard(),
+    )
+
+
+@router.message(SellRequestFlow.waiting_for_comment)
+async def handle_sell_comment(
+    message: Message,
+    bot: Bot,
+    settings: Settings,
+    state: FSMContext,
+    database: MarketRepository,
+) -> None:
+    if not message.from_user:
+        return
+
+    comment = _clean_text(message.text)
+    if not comment:
+        await message.answer("Напишите комментарий или `-`.")
+        return
+
+    data = await state.get_data()
+    sell_request = await database.create_sell_request(
+        telegram_id=message.from_user.id,
+        realm_type=str(data["realm_type"]),
+        server=str(data["server"]),
+        side=str(data["side"]),
+        amount=str(data["amount"]),
+        price=str(data["price"]),
+        comment=None if comment == "-" else comment,
+    )
+    await state.clear()
+    await _notify_admins_about_sell_request(bot, settings, sell_request, message.from_user)
+
+    await message.answer(
+        "Заявка на продажу создана.\n\n"
+        f"Номер заявки: #{sell_request.id}\n"
+        "Администратор проверит данные и свяжется с вами.",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(SupportFlow.waiting_for_question)
+async def handle_support_question(
+    message: Message,
+    bot: Bot,
+    settings: Settings,
+    state: FSMContext,
+    database: MarketRepository,
+) -> None:
+    if not message.from_user:
+        return
+
+    question = _clean_text(message.text)
+    if not question:
+        await message.answer("Опишите вопрос текстом.")
+        return
+
+    await _save_client(message.from_user, database)
+    ticket = await database.create_support_ticket(
+        telegram_id=message.from_user.id,
+        question=question,
+    )
+    await state.clear()
+    await _notify_admins_about_support_ticket(bot, settings, ticket, message.from_user)
+
+    await message.answer(
+        "Вопрос отправлен в поддержку.\n\n"
+        f"Номер обращения: #{ticket.id}",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+def main_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Купить", callback_data="shop:buy"),
+                InlineKeyboardButton(text="Продать", callback_data="shop:sell"),
+            ],
+            [
+                InlineKeyboardButton(text="Мои заявки", callback_data="shop:my_requests"),
+                InlineKeyboardButton(text="Поддержка", callback_data="shop:support"),
+            ],
+        ]
+    )
+
+
+def client_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Главное меню", callback_data="shop:home")]]
+    )
+
+
+def buy_realm_type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=label, callback_data=f"shop:realm:{value}")
+                for value, label in REALM_TYPE_LABELS.items()
+            ],
+            [InlineKeyboardButton(text="Назад", callback_data="shop:home")],
+        ]
+    )
+
+
+def sell_realm_type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=label, callback_data=f"sell:realm:{value}")
+                for value, label in REALM_TYPE_LABELS.items()
+            ],
+            [InlineKeyboardButton(text="Назад", callback_data="shop:home")],
+        ]
+    )
+
+
+def servers_keyboard(realm_type: str, servers: list[str]) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=server, callback_data=f"shop:server:{realm_type}:{index}")]
+        for index, server in enumerate(servers)
+    ]
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="shop:buy")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def sides_keyboard(realm_type: str, server_index: int, sides: list[str]) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=side, callback_data=f"shop:side:{realm_type}:{server_index}:{index}")]
+        for index, side in enumerate(sides)
+    ]
+    rows.append([InlineKeyboardButton(text="Назад", callback_data=f"shop:realm:{realm_type}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def products_keyboard(products: list[Product], realm_type: str, server_index: int) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"Купить #{product.id} - {product.price}",
+                callback_data=f"shop:purchase:{product.id}",
+            )
+        ]
+        for product in products
+    ]
+    rows.append([InlineKeyboardButton(text="Назад", callback_data=f"shop:server:{realm_type}:{server_index}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_purchase_keyboard(request_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="В работу", callback_data=f"admin:purchase_status:{request_id}:in_progress"),
+                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:purchase_status:{request_id}:completed"),
+            ],
+            [InlineKeyboardButton(text="Отменить", callback_data=f"admin:purchase_status:{request_id}:cancelled")],
+        ]
+    )
+
+
+def admin_sell_keyboard(request_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="В работу", callback_data=f"admin:sell_status:{request_id}:in_progress"),
+                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:sell_status:{request_id}:completed"),
+            ],
+            [InlineKeyboardButton(text="Отменить", callback_data=f"admin:sell_status:{request_id}:cancelled")],
+        ]
+    )
+
+
+def admin_support_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Ответить", callback_data=f"admin:support_answer:{ticket_id}"),
+                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:support_close:{ticket_id}"),
+            ]
+        ]
+    )
+
+
+async def _save_client(user: User, database: MarketRepository) -> None:
+    await database.upsert_client(
+        telegram_id=user.id,
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        language_code=user.language_code,
+        is_bot=user.is_bot,
+    )
+
+
+async def _notify_admins_about_purchase(
+    bot: Bot,
+    settings: Settings,
+    request: PurchaseRequest,
+    product: Product,
+    user: User,
+) -> None:
+    username = _username(user.username)
+    full_name = _user_full_name(user)
+    text = (
+        f"Новая заявка на покупку #{request.id}\n\n"
+        f"Клиент: {full_name}\n"
+        f"Username: {username}\n"
+        f"Telegram ID: {user.id}\n\n"
+        f"{_format_product(product)}"
+    )
+    await _send_to_admins(bot, settings, text, admin_purchase_keyboard(request.id))
+
+
+async def _notify_admins_about_sell_request(
+    bot: Bot,
+    settings: Settings,
+    sell_request: SellRequestDetails,
+    user: User,
+) -> None:
+    text = (
+        f"Новая заявка на продажу #{sell_request.id}\n\n"
+        f"Клиент: {_user_full_name(user)}\n"
+        f"Username: {_username(user.username)}\n"
+        f"Telegram ID: {user.id}\n\n"
+        f"{_format_sell_request(sell_request)}"
+    )
+    await _send_to_admins(bot, settings, text, admin_sell_keyboard(sell_request.id))
+
+
+async def _notify_admins_about_support_ticket(
+    bot: Bot,
+    settings: Settings,
+    ticket: SupportTicket,
+    user: User,
+) -> None:
+    text = (
+        f"Новое обращение в поддержку #{ticket.id}\n\n"
+        f"Клиент: {_user_full_name(user)}\n"
+        f"Username: {_username(user.username)}\n"
+        f"Telegram ID: {user.id}\n\n"
+        f"Вопрос:\n{ticket.question}"
+    )
+    await _send_to_admins(bot, settings, text, admin_support_keyboard(ticket.id))
+
+
+async def _send_to_admins(
+    bot: Bot,
+    settings: Settings,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    for admin_id in settings.admin_ids:
+        try:
+            await bot.send_message(admin_id, text, reply_markup=reply_markup)
+        except TelegramAPIError:
+            continue
+
+
+async def _my_requests_text(database: MarketRepository, telegram_id: int) -> str:
+    purchases = await database.latest_purchase_requests_by_user(telegram_id, limit=5)
+    sells = await database.latest_sell_requests_by_user(telegram_id, limit=5)
+    tickets = await database.latest_support_tickets_by_user(telegram_id, limit=5)
+
+    lines = ["Мои заявки"]
+
+    lines.append("")
+    lines.append("Покупки:")
+    if purchases:
+        for request in purchases:
+            lines.append(
+                f"#{request.id} - {request_status_label(request.status)} - "
+                f"{realm_type_label(request.product.realm_type)}, {request.product.server}, "
+                f"{request.product.side}, {request.price_snapshot or request.product.price}"
+            )
+    else:
+        lines.append("Пока нет заявок на покупку.")
+
+    lines.append("")
+    lines.append("Продажи:")
+    if sells:
+        for request in sells:
+            lines.append(
+                f"#{request.id} - {request_status_label(request.status)} - "
+                f"{realm_type_label(request.realm_type)}, {request.server}, "
+                f"{request.side}, {request.amount}, {request.price}"
+            )
+    else:
+        lines.append("Пока нет заявок на продажу.")
+
+    lines.append("")
+    lines.append("Поддержка:")
+    if tickets:
+        for ticket in tickets:
+            lines.append(f"#{ticket.id} - {support_status_label(ticket.status)} - {ticket.created_at}")
+    else:
+        lines.append("Пока нет обращений.")
+
+    return "\n".join(lines)
+
+
+def _servers_text(realm_type: str, servers: list[str]) -> str:
+    if not servers:
+        return f"{realm_type_label(realm_type)}\n\nПока нет товаров."
+
+    return f"{realm_type_label(realm_type)}\n\nВыберите сервер:"
+
+
+def _sides_text(realm_type: str, server: str, sides: list[str]) -> str:
+    if not sides:
+        return (
+            f"{realm_type_label(realm_type)}\n"
+            f"Сервер: {server}\n\n"
+            "Пока нет доступных сторон."
+        )
+
+    return (
+        f"{realm_type_label(realm_type)}\n"
+        f"Сервер: {server}\n\n"
+        "Выберите сторону:"
+    )
+
+
+def _products_text(realm_type: str, server: str, side: str, products: list[Product]) -> str:
+    if not products:
+        return (
+            f"{realm_type_label(realm_type)}\n"
+            f"Сервер: {server}\n"
+            f"Сторона: {side}\n\n"
+            "Пока нет товаров."
+        )
+
+    lines = [
+        realm_type_label(realm_type),
+        f"Сервер: {server}",
+        f"Сторона: {side}",
+        "",
+        "Доступные предложения:",
+    ]
+    for product in products:
+        lines.append("")
+        lines.append(f"#{product.id}\nЦена: {product.price}")
+
+    return "\n".join(lines)
+
+
+def _format_product(product: Product) -> str:
+    return (
+        f"Товар #{product.id}\n"
+        f"Тип: {realm_type_label(product.realm_type)}\n"
+        f"Сервер: {product.server}\n"
+        f"Сторона: {product.side}\n"
+        f"Цена: {product.price}"
+    )
+
+
+def _format_sell_request(request: SellRequestDetails) -> str:
+    comment = request.comment or "без комментария"
+    return (
+        f"Продажа #{request.id}\n"
+        f"Статус: {request_status_label(request.status)}\n"
+        f"Тип: {realm_type_label(request.realm_type)}\n"
+        f"Сервер: {request.server}\n"
+        f"Сторона: {request.side}\n"
+        f"Количество: {request.amount}\n"
+        f"Цена: {request.price}\n"
+        f"Комментарий: {comment}"
+    )
+
+
+def _parse_catalog_index_callback(data: str | None, *, expected_prefix: str) -> tuple[str, int] | None:
+    if not data:
+        return None
+
+    parts = data.split(":")
+    if len(parts) != 4 or ":".join(parts[:2]) != expected_prefix:
+        return None
+
+    realm_type = parts[2]
+    if not is_valid_realm_type(realm_type):
+        return None
+
+    try:
+        return realm_type, int(parts[3])
+    except ValueError:
+        return None
+
+
+def _parse_side_callback(data: str | None) -> tuple[str, int, int] | None:
+    if not data:
+        return None
+
+    parts = data.split(":")
+    if len(parts) != 5 or ":".join(parts[:2]) != "shop:side":
+        return None
+
+    realm_type = parts[2]
+    if not is_valid_realm_type(realm_type):
+        return None
+
+    try:
+        return realm_type, int(parts[3]), int(parts[4])
+    except ValueError:
+        return None
+
+
+def _parse_product_id(data: str | None) -> int | None:
+    if not data:
+        return None
+
+    parts = data.split(":")
+    if len(parts) != 3 or ":".join(parts[:2]) != "shop:purchase":
+        return None
+
+    try:
+        return int(parts[2])
+    except ValueError:
+        return None
+
+
+def _clean_text(value: str | None) -> str:
+    return value.strip() if value else ""
+
+
+def _username(username: str | None) -> str:
+    return f"@{username}" if username else "без username"
+
+
+def _user_full_name(user: User) -> str:
+    return " ".join(part for part in (user.first_name, user.last_name) if part) or "Без имени"
