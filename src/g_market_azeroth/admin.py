@@ -607,7 +607,7 @@ async def handle_product_price(
         return
 
     data = await state.get_data()
-    product = await database.add_product(
+    product = await database.create_catalog_product(
         realm_type=str(data["realm_type"]),
         server=str(data["server"]),
         side=str(data["side"]),
@@ -636,7 +636,7 @@ async def handle_change_price_product_id(
         await message.answer("Введите ID товара числом.")
         return
 
-    product = await database.get_product(product_id)
+    product = await database.get_catalog_product(product_id)
     if product is None:
         await message.answer("Товар с таким ID не найден. Введите другой ID или /cancel.")
         return
@@ -667,7 +667,7 @@ async def handle_change_price_value(
         return
 
     data = await state.get_data()
-    product = await database.update_product_price(
+    product = await database.change_product_price(
         product_id=int(data["product_id"]),
         price=price,
     )
@@ -852,7 +852,7 @@ async def _clients_text(database: MarketRepository) -> str:
 
 
 async def _products_text(database: MarketRepository) -> str:
-    latest_products = await database.latest_products(limit=10)
+    latest_products = await database.list_catalog_products(limit=10)
     if not latest_products:
         return "Товары\n\nВ базе пока нет товаров. Нажмите `Добавить товар`."
 

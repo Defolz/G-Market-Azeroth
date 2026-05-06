@@ -182,7 +182,11 @@ async def handle_side(callback: CallbackQuery, database: MarketRepository) -> No
         return
 
     side = sides[side_index]
-    products = await database.list_products(realm_type, server, side)
+    products = await database.list_catalog_products(
+        realm_type=realm_type,
+        server=server,
+        side=side,
+    )
 
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
@@ -204,7 +208,7 @@ async def handle_purchase(
         await callback.answer("Не удалось создать заявку.", show_alert=True)
         return
 
-    product = await database.get_product(product_id)
+    product = await database.get_catalog_product(product_id)
     if product is None:
         await callback.answer("Товар больше не доступен.", show_alert=True)
         return

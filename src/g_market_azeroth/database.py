@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from g_market_azeroth.repositories.products import Product, ProductsRepository
+from g_market_azeroth.services.products import ProductService
 
 
 @dataclass(frozen=True)
@@ -127,8 +128,23 @@ class MarketRepository:
         side: str,
         price: str,
     ) -> Product:
+        return await self.create_catalog_product(
+            realm_type=realm_type,
+            server=server,
+            side=side,
+            price=price,
+        )
+
+    async def create_catalog_product(
+        self,
+        *,
+        realm_type: str,
+        server: str,
+        side: str,
+        price: str,
+    ) -> Product:
         return await asyncio.to_thread(
-            self._add_product_sync,
+            self._create_catalog_product_sync,
             realm_type,
             server,
             side,
@@ -139,7 +155,7 @@ class MarketRepository:
         return await asyncio.to_thread(self._count_products_sync)
 
     async def latest_products(self, limit: int = 10) -> list[Product]:
-        return await asyncio.to_thread(self._latest_products_sync, limit)
+        return await self.list_catalog_products(limit=limit)
 
     async def list_servers(self, realm_type: str) -> list[str]:
         return await asyncio.to_thread(self._list_servers_sync, realm_type)
@@ -148,13 +164,39 @@ class MarketRepository:
         return await asyncio.to_thread(self._list_sides_sync, realm_type, server)
 
     async def list_products(self, realm_type: str, server: str, side: str) -> list[Product]:
-        return await asyncio.to_thread(self._list_products_sync, realm_type, server, side)
+        return await self.list_catalog_products(
+            realm_type=realm_type,
+            server=server,
+            side=side,
+        )
+
+    async def list_catalog_products(
+        self,
+        *,
+        realm_type: str | None = None,
+        server: str | None = None,
+        side: str | None = None,
+        limit: int | None = None,
+    ) -> list[Product]:
+        return await asyncio.to_thread(
+            self._list_catalog_products_sync,
+            realm_type,
+            server,
+            side,
+            limit,
+        )
 
     async def get_product(self, product_id: int) -> Product | None:
-        return await asyncio.to_thread(self._get_product_sync, product_id)
+        return await self.get_catalog_product(product_id)
+
+    async def get_catalog_product(self, product_id: int) -> Product | None:
+        return await asyncio.to_thread(self._get_catalog_product_sync, product_id)
 
     async def update_product_price(self, *, product_id: int, price: str) -> Product | None:
-        return await asyncio.to_thread(self._update_product_price_sync, product_id, price)
+        return await self.change_product_price(product_id=product_id, price=price)
+
+    async def change_product_price(self, *, product_id: int, price: str) -> Product | None:
+        return await asyncio.to_thread(self._change_product_price_sync, product_id, price)
 
     async def create_purchase_request(self, *, product_id: int, telegram_id: int) -> PurchaseRequest:
         return await asyncio.to_thread(
@@ -509,12 +551,12 @@ class MarketRepository:
 
         return [_client_from_row(row) for row in rows]
 
-    def _add_product_sync(self, realm_type: str, server: str, side: str, price: str) -> Product:
+    def _create_catalog_product_sync(self, realm_type: str, server: str, side: str, price: str) -> Product:
         with closing(self._connect()) as connection:
-            product = ProductsRepository(connection).create_product(
-                game_type=realm_type,
+            product = ProductService(ProductsRepository(connection)).create_catalog_product(
+                realm_type=realm_type,
                 server=server,
-                faction=side,
+                side=side,
                 price=price,
             )
             connection.commit()
@@ -525,10 +567,6 @@ class MarketRepository:
         with closing(self._connect()) as connection:
             return ProductsRepository(connection).count_products()
 
-    def _latest_products_sync(self, limit: int) -> list[Product]:
-        with closing(self._connect()) as connection:
-            return ProductsRepository(connection).latest_products(limit)
-
     def _list_servers_sync(self, realm_type: str) -> list[str]:
         with closing(self._connect()) as connection:
             return ProductsRepository(connection).list_servers(realm_type)
@@ -537,17 +575,31 @@ class MarketRepository:
         with closing(self._connect()) as connection:
             return ProductsRepository(connection).list_sides(realm_type, server)
 
-    def _list_products_sync(self, realm_type: str, server: str, side: str) -> list[Product]:
+    def _list_catalog_products_sync(
+        self,
+        realm_type: str | None,
+        server: str | None,
+        side: str | None,
+        limit: int | None,
+    ) -> list[Product]:
         with closing(self._connect()) as connection:
-            return ProductsRepository(connection).list_products(realm_type, server, side)
+            return ProductService(ProductsRepository(connection)).list_catalog_products(
+                realm_type=realm_type,
+                server=server,
+                side=side,
+                limit=limit,
+            )
 
-    def _get_product_sync(self, product_id: int) -> Product | None:
+    def _get_catalog_product_sync(self, product_id: int) -> Product | None:
         with closing(self._connect()) as connection:
-            return ProductsRepository(connection).get_product(product_id)
+            return ProductService(ProductsRepository(connection)).get_catalog_product(product_id)
 
-    def _update_product_price_sync(self, product_id: int, price: str) -> Product | None:
+    def _change_product_price_sync(self, product_id: int, price: str) -> Product | None:
         with closing(self._connect()) as connection:
-            product = ProductsRepository(connection).update_price(product_id=product_id, price=price)
+            product = ProductService(ProductsRepository(connection)).change_product_price(
+                product_id=product_id,
+                price=price,
+            )
             connection.commit()
 
         return product
