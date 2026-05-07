@@ -19,6 +19,9 @@ from g_market_azeroth.parsers.funpay.client import FunPayClient
 from g_market_azeroth.parsers.funpay.export import export_market_tables
 from g_market_azeroth.parsers.funpay.mapping_export import export_unique_servers
 from g_market_azeroth.parsers.funpay.models import FunPayOffer
+from g_market_azeroth.parsers.funpay.normalization_export import (
+    export_normalization_preview,
+)
 from g_market_azeroth.parsers.funpay.parser import (
     ListingDebugReport,
     inspect_listing_page,
@@ -39,6 +42,7 @@ DEFAULT_DB_PATH = "data/funpay_prices.sqlite3"
 DEFAULT_EXPORT_DIR = "exports"
 DEFAULT_DEBUG_DIR = "debug"
 DEFAULT_UNIQUE_SERVERS_FILENAME = "funpay_unique_servers.json"
+DEFAULT_NORMALIZATION_PREVIEW_FILENAME = "funpay_normalization_preview.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-detail-offers", type=int, default=None)
     parser.add_argument("--detail-progress-every", type=int, default=50)
     parser.add_argument("--export-unique-servers", nargs="?", const="")
+    parser.add_argument("--export-normalization-preview", action="store_true")
     return parser.parse_args()
 
 
@@ -135,6 +140,11 @@ def main() -> None:
         export_path = _unique_servers_export_path(args.export_unique_servers)
         rows_count = export_unique_servers(Path(args.db_path), export_path)
         print(f"unique servers exported: {rows_count} to {export_path}")
+
+    if args.export_normalization_preview:
+        export_path = Path(args.export_dir) / DEFAULT_NORMALIZATION_PREVIEW_FILENAME
+        rows_count = export_normalization_preview(Path(args.db_path), export_path)
+        print(f"normalization preview exported: {rows_count} to {export_path}")
 
 
 def _should_fetch_pages(args: argparse.Namespace) -> bool:
