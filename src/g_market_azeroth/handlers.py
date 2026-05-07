@@ -9,7 +9,6 @@ from g_market_azeroth.catalog import (
     REALM_TYPE_LABELS,
     is_valid_realm_type,
     realm_type_label,
-    request_status_label,
     support_status_label,
 )
 from g_market_azeroth.config import Settings
@@ -21,6 +20,7 @@ from g_market_azeroth.database import (
     SupportTicket,
 )
 from g_market_azeroth.logging import log_user_action
+from g_market_azeroth.services.statuses import format_request_status
 
 router = Router(name="client")
 
@@ -584,7 +584,7 @@ async def _my_requests_text(database: MarketRepository, telegram_id: int) -> str
     if purchases:
         for request in purchases:
             lines.append(
-                f"#{request.id} - {request_status_label(request.status)} - "
+                f"#{request.id} - {format_request_status(request.status, compact=True)} - "
                 f"{realm_type_label(request.product.realm_type)}, {request.product.server}, "
                 f"{request.product.side}, {request.price_snapshot or request.product.price}"
             )
@@ -596,7 +596,7 @@ async def _my_requests_text(database: MarketRepository, telegram_id: int) -> str
     if sells:
         for request in sells:
             lines.append(
-                f"#{request.id} - {request_status_label(request.status)} - "
+                f"#{request.id} - {format_request_status(request.status, compact=True)} - "
                 f"{realm_type_label(request.realm_type)}, {request.server}, "
                 f"{request.side}, {request.amount}, {request.price}"
             )
@@ -673,7 +673,7 @@ def _format_sell_request(request: SellRequestDetails) -> str:
     comment = request.comment or "без комментария"
     return (
         f"Продажа #{request.id}\n"
-        f"Статус: {request_status_label(request.status)}\n"
+        f"{format_request_status(request.status)}\n"
         f"Тип: {realm_type_label(request.realm_type)}\n"
         f"Сервер: {request.server}\n"
         f"Сторона: {request.side}\n"

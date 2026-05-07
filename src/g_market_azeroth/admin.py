@@ -9,7 +9,6 @@ from g_market_azeroth.catalog import (
     REALM_TYPE_LABELS,
     is_valid_request_status,
     realm_type_label,
-    request_status_label,
     support_status_label,
 )
 from g_market_azeroth.config import Settings
@@ -22,6 +21,7 @@ from g_market_azeroth.database import (
     SupportTicket,
 )
 from g_market_azeroth.logging import log_admin_action
+from g_market_azeroth.services.statuses import format_request_status
 
 router = Router(name="admin")
 
@@ -389,7 +389,7 @@ async def handle_purchase_status(
         bot,
         request.telegram_id,
         "Статус заявки на покупку обновлён.\n\n"
-        f"Заявка #{request.id}: {request_status_label(request.status)}",
+        f"Заявка #{request.id}\n{format_request_status(request.status)}",
     )
 
     if isinstance(callback.message, Message):
@@ -431,7 +431,7 @@ async def handle_sell_status(
         bot,
         request.telegram_id,
         "Статус заявки на продажу обновлён.\n\n"
-        f"Заявка #{request.id}: {request_status_label(request.status)}",
+        f"Заявка #{request.id}\n{format_request_status(request.status)}",
     )
 
     if isinstance(callback.message, Message):
@@ -904,7 +904,7 @@ def _purchase_requests_list_text(requests: list[PurchaseRequestDetails]) -> str:
     lines = ["Заявки на покупку", "", "Последние 10:"]
     for request in requests:
         lines.append(
-            f"#{request.id} - {request_status_label(request.status)} - "
+            f"#{request.id} - {format_request_status(request.status, compact=True)} - "
             f"{request.client_username or request.telegram_id} - "
             f"{request.product.server}, {request.product.side}, {request.price_snapshot or request.product.price}"
         )
@@ -918,7 +918,7 @@ def _sell_requests_list_text(requests: list[SellRequestDetails]) -> str:
     lines = ["Заявки на продажу", "", "Последние 10:"]
     for request in requests:
         lines.append(
-            f"#{request.id} - {request_status_label(request.status)} - "
+            f"#{request.id} - {format_request_status(request.status, compact=True)} - "
             f"{request.client_username or request.telegram_id} - "
             f"{request.server}, {request.side}, {request.amount}, {request.price}"
         )
@@ -976,7 +976,7 @@ def _format_purchase_request(request: PurchaseRequestDetails) -> str:
 
     return (
         f"Заявка на покупку #{request.id}\n"
-        f"Статус: {request_status_label(request.status)}\n"
+        f"{format_request_status(request.status)}\n"
         f"Дата: {request.created_at}\n"
         f"Клиент: {full_name}\n"
         f"Username: {username}\n"
@@ -996,7 +996,7 @@ def _format_sell_request(request: SellRequestDetails) -> str:
 
     return (
         f"Заявка на продажу #{request.id}\n"
-        f"Статус: {request_status_label(request.status)}\n"
+        f"{format_request_status(request.status)}\n"
         f"Дата: {request.created_at}\n"
         f"Клиент: {full_name}\n"
         f"Username: {username}\n"
