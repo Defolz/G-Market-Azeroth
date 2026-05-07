@@ -8,6 +8,7 @@ LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 _APP_HANDLER_MARKER = "_g_market_azeroth_handler"
 _AUDIT_LOGGER_NAME = "g_market_azeroth.audit"
+_METRICS_LOGGER_NAME = "g_market_azeroth.metrics"
 
 
 def setup_logging(log_level: str) -> None:
@@ -42,6 +43,16 @@ def log_admin_action(admin_id: int, action: str, **fields: Any) -> None:
 
 def log_user_action(user_id: int, action: str, **fields: Any) -> None:
     _log_audit_event("USER_ACTION", actor_field="user_id", actor_id=user_id, action=action, fields=fields)
+
+
+def log_metric(action: str, **fields: Any) -> None:
+    parts = ["METRIC", f"action={_audit_value(action)}"]
+    for key, value in fields.items():
+        if value is None:
+            continue
+        parts.append(f"{key}={_audit_value(value)}")
+
+    logging.getLogger(_METRICS_LOGGER_NAME).info(" | ".join(parts))
 
 
 def _parse_log_level(log_level: str) -> int:

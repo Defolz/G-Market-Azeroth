@@ -24,7 +24,7 @@ from g_market_azeroth.database import (
     SellRequestDetails,
     SupportTicket,
 )
-from g_market_azeroth.logging import log_user_action
+from g_market_azeroth.logging import log_metric, log_user_action
 from g_market_azeroth.services.statuses import format_request_status
 
 router = Router(name="client")
@@ -59,6 +59,7 @@ async def handle_start(message: Message, database: MarketRepository, state: FSMC
     await state.clear()
     if message.from_user:
         await _save_client(message.from_user, database)
+        log_metric("registration", user_id=message.from_user.id)
 
     await message.answer(WELCOME_TEXT, reply_markup=main_menu_keyboard())
 
@@ -233,6 +234,12 @@ async def handle_purchase(
         request_id=request.id,
         product_id=product.id,
     )
+    log_metric(
+        "purchase_request_created",
+        user_id=callback.from_user.id,
+        request_id=request.id,
+        product_id=product.id,
+    )
     await _notify_admins_about_purchase(bot, settings, request, product, callback.from_user)
 
     if isinstance(callback.message, Message):
@@ -348,6 +355,12 @@ async def handle_sell_comment(
         server=sell_request.server,
         side=sell_request.side,
     )
+    log_metric(
+        "sell_request_created",
+        user_id=message.from_user.id,
+        request_id=sell_request.id,
+        realm_type=sell_request.realm_type,
+    )
     await _notify_admins_about_sell_request(bot, settings, sell_request, message.from_user)
 
     await message.answer(
@@ -383,6 +396,11 @@ async def handle_support_question(
     log_user_action(
         message.from_user.id,
         "support_request_created",
+        ticket_id=ticket.id,
+    )
+    log_metric(
+        "support_request_created",
+        user_id=message.from_user.id,
         ticket_id=ticket.id,
     )
     await _notify_admins_about_support_ticket(bot, settings, ticket, message.from_user)
