@@ -16,6 +16,7 @@ if str(SRC_DIR) not in sys.path:
 
 from g_market_azeroth.parsers.funpay.client import FunPayClient
 from g_market_azeroth.parsers.funpay.export import export_market_tables
+from g_market_azeroth.parsers.funpay.mapping_export import export_unique_servers
 from g_market_azeroth.parsers.funpay.models import FunPayOffer
 from g_market_azeroth.parsers.funpay.parser import (
     ListingDebugReport,
@@ -36,6 +37,7 @@ DEFAULT_PRIVATE_URL = "https://funpay.com/chips/34/"
 DEFAULT_DB_PATH = "data/funpay_prices.sqlite3"
 DEFAULT_EXPORT_DIR = "exports"
 DEFAULT_DEBUG_DIR = "debug"
+DEFAULT_UNIQUE_SERVERS_FILENAME = "funpay_unique_servers.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--detail-delay-seconds", type=float, default=1.0)
     parser.add_argument("--max-detail-offers", type=int, default=None)
     parser.add_argument("--detail-progress-every", type=int, default=50)
+    parser.add_argument("--export-unique-servers", nargs="?", const="")
     return parser.parse_args()
 
 
@@ -126,6 +129,11 @@ def main() -> None:
     if args.audit:
         _print_audit_report(get_audit_report(Path(args.db_path)))
 
+    if args.export_unique_servers is not None:
+        export_path = _unique_servers_export_path(args.export_unique_servers)
+        rows_count = export_unique_servers(Path(args.db_path), export_path)
+        print(f"unique servers exported: {rows_count} to {export_path}")
+
 
 def _should_fetch_pages(args: argparse.Namespace) -> bool:
     return bool(
@@ -194,6 +202,17 @@ def _dump_json(path: Path, offers: list[FunPayOffer]) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _unique_servers_export_path(raw_path: str) -> Path:
+    if not raw_path:
+        return Path(DEFAULT_EXPORT_DIR) / DEFAULT_UNIQUE_SERVERS_FILENAME
+
+    path = Path(raw_path)
+    if path.suffix:
+        return path
+
+    return path / DEFAULT_UNIQUE_SERVERS_FILENAME
 
 
 def _print_audit_report(report: FunPayAuditReport) -> None:
