@@ -31,6 +31,12 @@ from g_market_azeroth.services.statuses import format_request_status
 
 router = Router(name="admin")
 ADMIN_REQUEST_PAGE_SIZE = 5
+REQUEST_STATUS_FILTERS = (
+    REQUEST_STATUS_NEW,
+    REQUEST_STATUS_IN_PROGRESS,
+    REQUEST_STATUS_DONE,
+    REQUEST_STATUS_CANCELLED,
+)
 
 
 class AddProduct(StatesGroup):
@@ -127,10 +133,10 @@ async def handle_requests(message: Message, settings: Settings, database: Market
     if not await _ensure_admin_message(message, settings):
         return
 
-    requests, page, page_count, total_count = await _purchase_requests_page(database, page=0)
+    requests, page, page_count, total_count = await _purchase_requests_page(database, page=0, status=None)
     await message.answer(
-        _purchase_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count),
-        reply_markup=purchase_requests_keyboard(requests, page=page, page_count=page_count),
+        _purchase_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count, status=None),
+        reply_markup=purchase_requests_keyboard(requests, page=page, page_count=page_count, status=None),
     )
 
 
@@ -139,10 +145,10 @@ async def handle_sell_requests(message: Message, settings: Settings, database: M
     if not await _ensure_admin_message(message, settings):
         return
 
-    requests, page, page_count, total_count = await _sell_requests_page(database, page=0)
+    requests, page, page_count, total_count = await _sell_requests_page(database, page=0, status=None)
     await message.answer(
-        _sell_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count),
-        reply_markup=sell_requests_keyboard(requests, page=page, page_count=page_count),
+        _sell_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count, status=None),
+        reply_markup=sell_requests_keyboard(requests, page=page, page_count=page_count, status=None),
     )
 
 
@@ -254,11 +260,11 @@ async def handle_admin_requests(
     if not await _ensure_admin_callback(callback, settings):
         return
 
-    requests, page, page_count, total_count = await _purchase_requests_page(database, page=0)
+    requests, page, page_count, total_count = await _purchase_requests_page(database, page=0, status=None)
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            _purchase_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count),
-            reply_markup=purchase_requests_keyboard(requests, page=page, page_count=page_count),
+            _purchase_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count, status=None),
+            reply_markup=purchase_requests_keyboard(requests, page=page, page_count=page_count, status=None),
         )
     await callback.answer()
 
@@ -272,12 +278,31 @@ async def handle_admin_requests_page(
     if not await _ensure_admin_callback(callback, settings):
         return
 
-    page = _parse_page_callback(callback.data, "admin:requests_page")
-    requests, page, page_count, total_count = await _purchase_requests_page(database, page=page)
+    page, status = _parse_page_filter_callback(callback.data, "admin:requests_page")
+    requests, page, page_count, total_count = await _purchase_requests_page(database, page=page, status=status)
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            _purchase_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count),
-            reply_markup=purchase_requests_keyboard(requests, page=page, page_count=page_count),
+            _purchase_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count, status=status),
+            reply_markup=purchase_requests_keyboard(requests, page=page, page_count=page_count, status=status),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:requests_filter:"))
+async def handle_admin_requests_filter(
+    callback: CallbackQuery,
+    settings: Settings,
+    database: MarketRepository,
+) -> None:
+    if not await _ensure_admin_callback(callback, settings):
+        return
+
+    status = _parse_status_filter_callback(callback.data, "admin:requests_filter")
+    requests, page, page_count, total_count = await _purchase_requests_page(database, page=0, status=status)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _purchase_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count, status=status),
+            reply_markup=purchase_requests_keyboard(requests, page=page, page_count=page_count, status=status),
         )
     await callback.answer()
 
@@ -291,11 +316,11 @@ async def handle_admin_sell_requests(
     if not await _ensure_admin_callback(callback, settings):
         return
 
-    requests, page, page_count, total_count = await _sell_requests_page(database, page=0)
+    requests, page, page_count, total_count = await _sell_requests_page(database, page=0, status=None)
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            _sell_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count),
-            reply_markup=sell_requests_keyboard(requests, page=page, page_count=page_count),
+            _sell_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count, status=None),
+            reply_markup=sell_requests_keyboard(requests, page=page, page_count=page_count, status=None),
         )
     await callback.answer()
 
@@ -309,12 +334,31 @@ async def handle_admin_sell_requests_page(
     if not await _ensure_admin_callback(callback, settings):
         return
 
-    page = _parse_page_callback(callback.data, "admin:sell_requests_page")
-    requests, page, page_count, total_count = await _sell_requests_page(database, page=page)
+    page, status = _parse_page_filter_callback(callback.data, "admin:sell_requests_page")
+    requests, page, page_count, total_count = await _sell_requests_page(database, page=page, status=status)
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            _sell_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count),
-            reply_markup=sell_requests_keyboard(requests, page=page, page_count=page_count),
+            _sell_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count, status=status),
+            reply_markup=sell_requests_keyboard(requests, page=page, page_count=page_count, status=status),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:sell_requests_filter:"))
+async def handle_admin_sell_requests_filter(
+    callback: CallbackQuery,
+    settings: Settings,
+    database: MarketRepository,
+) -> None:
+    if not await _ensure_admin_callback(callback, settings):
+        return
+
+    status = _parse_status_filter_callback(callback.data, "admin:sell_requests_filter")
+    requests, page, page_count, total_count = await _sell_requests_page(database, page=0, status=status)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _sell_requests_list_text(requests, page=page, page_count=page_count, total_count=total_count, status=status),
+            reply_markup=sell_requests_keyboard(requests, page=page, page_count=page_count, status=status),
         )
     await callback.answer()
 
@@ -840,12 +884,14 @@ def purchase_requests_keyboard(
     *,
     page: int,
     page_count: int,
+    status: str | None,
 ) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=f"Покупка #{request.id}", callback_data=f"admin:purchase_view:{request.id}")]
         for request in requests
     ]
-    rows.append(_pagination_row("admin:requests_page", page=page, page_count=page_count))
+    rows.append(_request_filter_row("admin:requests_filter", selected_status=status))
+    rows.append(_pagination_row("admin:requests_page", page=page, page_count=page_count, status=status))
     rows.append([InlineKeyboardButton(text="Назад", callback_data="admin:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -870,12 +916,14 @@ def sell_requests_keyboard(
     *,
     page: int,
     page_count: int,
+    status: str | None,
 ) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=f"Продажа #{request.id}", callback_data=f"admin:sell_view:{request.id}")]
         for request in requests
     ]
-    rows.append(_pagination_row("admin:sell_requests_page", page=page, page_count=page_count))
+    rows.append(_request_filter_row("admin:sell_requests_filter", selected_status=status))
+    rows.append(_pagination_row("admin:sell_requests_page", page=page, page_count=page_count, status=status))
     rows.append([InlineKeyboardButton(text="Назад", callback_data="admin:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -969,12 +1017,18 @@ async def _purchase_requests_page(
     database: MarketRepository,
     *,
     page: int,
+    status: str | None,
 ) -> tuple[list[PurchaseRequestDetails], int, int, int]:
-    total_count = await database.count_purchase_requests()
+    total_count = await database.count_purchase_requests(status=status)
     page_count = _page_count(total_count)
     page = _clamp_page(page, page_count)
-    fetch_limit = (page + 1) * ADMIN_REQUEST_PAGE_SIZE
+    if status is None:
+        fetch_limit = (page + 1) * ADMIN_REQUEST_PAGE_SIZE
+    else:
+        fetch_limit = await database.count_purchase_requests()
     requests = await database.latest_purchase_requests(limit=fetch_limit)
+    if status is not None:
+        requests = [request for request in requests if request.status == status]
     start_index = page * ADMIN_REQUEST_PAGE_SIZE
     return requests[start_index : start_index + ADMIN_REQUEST_PAGE_SIZE], page, page_count, total_count
 
@@ -983,12 +1037,18 @@ async def _sell_requests_page(
     database: MarketRepository,
     *,
     page: int,
+    status: str | None,
 ) -> tuple[list[SellRequestDetails], int, int, int]:
-    total_count = await database.count_sell_requests()
+    total_count = await database.count_sell_requests(status=status)
     page_count = _page_count(total_count)
     page = _clamp_page(page, page_count)
-    fetch_limit = (page + 1) * ADMIN_REQUEST_PAGE_SIZE
+    if status is None:
+        fetch_limit = (page + 1) * ADMIN_REQUEST_PAGE_SIZE
+    else:
+        fetch_limit = await database.count_sell_requests()
     requests = await database.latest_sell_requests(limit=fetch_limit)
+    if status is not None:
+        requests = [request for request in requests if request.status == status]
     start_index = page * ADMIN_REQUEST_PAGE_SIZE
     return requests[start_index : start_index + ADMIN_REQUEST_PAGE_SIZE], page, page_count, total_count
 
@@ -999,11 +1059,18 @@ def _purchase_requests_list_text(
     page: int,
     page_count: int,
     total_count: int,
+    status: str | None,
 ) -> str:
     if not requests:
-        return "Заявки на покупку\n\nЗаявок пока нет."
+        filter_line = _request_filter_text(status)
+        return f"Заявки на покупку\n\n{filter_line}\nЗаявок пока нет."
 
-    lines = ["Заявки на покупку", "", f"Страница {page + 1}/{page_count}. Всего: {total_count}"]
+    lines = [
+        "Заявки на покупку",
+        "",
+        _request_filter_text(status),
+        f"Страница {page + 1}/{page_count}. Всего: {total_count}",
+    ]
     for request in requests:
         lines.append(
             f"#{request.id} - {format_request_status(request.status, compact=True)} - "
@@ -1019,11 +1086,18 @@ def _sell_requests_list_text(
     page: int,
     page_count: int,
     total_count: int,
+    status: str | None,
 ) -> str:
     if not requests:
-        return "Заявки на продажу\n\nЗаявок пока нет."
+        filter_line = _request_filter_text(status)
+        return f"Заявки на продажу\n\n{filter_line}\nЗаявок пока нет."
 
-    lines = ["Заявки на продажу", "", f"Страница {page + 1}/{page_count}. Всего: {total_count}"]
+    lines = [
+        "Заявки на продажу",
+        "",
+        _request_filter_text(status),
+        f"Страница {page + 1}/{page_count}. Всего: {total_count}",
+    ]
     for request in requests:
         lines.append(
             f"#{request.id} - {format_request_status(request.status, compact=True)} - "
@@ -1174,22 +1248,78 @@ def _parse_callback_int(data: str | None, prefix: str) -> int | None:
         return None
 
 
-def _parse_page_callback(data: str | None, prefix: str) -> int:
-    value = _parse_callback_int(data, prefix)
-    if value is None:
-        return 0
+def _parse_page_filter_callback(data: str | None, prefix: str) -> tuple[int, str | None]:
+    if not data:
+        return 0, None
 
-    return value
+    parts = data.split(":")
+    if len(parts) not in {3, 4} or ":".join(parts[:2]) != prefix:
+        return 0, None
+
+    try:
+        page = int(parts[2])
+    except ValueError:
+        page = 0
+
+    status = parts[3] if len(parts) == 4 else None
+    if status is not None and not is_valid_request_status(status):
+        status = None
+
+    return page, status
 
 
-def _pagination_row(prefix: str, *, page: int, page_count: int) -> list[InlineKeyboardButton]:
-    previous_callback = f"{prefix}:{page - 1}" if page > 0 else "admin:noop"
-    next_callback = f"{prefix}:{page + 1}" if page < page_count - 1 else "admin:noop"
+def _parse_status_filter_callback(data: str | None, prefix: str) -> str | None:
+    if not data:
+        return None
+
+    parts = data.split(":")
+    if len(parts) != 3 or ":".join(parts[:2]) != prefix:
+        return None
+
+    status = parts[2]
+    return status if is_valid_request_status(status) else None
+
+
+def _pagination_row(
+    prefix: str,
+    *,
+    page: int,
+    page_count: int,
+    status: str | None,
+) -> list[InlineKeyboardButton]:
+    previous_callback = _page_callback(prefix, page - 1, status) if page > 0 else "admin:noop"
+    next_callback = _page_callback(prefix, page + 1, status) if page < page_count - 1 else "admin:noop"
     return [
         InlineKeyboardButton(text="⬅️ Back", callback_data=previous_callback),
         InlineKeyboardButton(text=f"{page + 1}/{page_count}", callback_data="admin:noop"),
         InlineKeyboardButton(text="Next ➡️", callback_data=next_callback),
     ]
+
+
+def _request_filter_row(prefix: str, *, selected_status: str | None) -> list[InlineKeyboardButton]:
+    all_text = "✓ Все" if selected_status is None else "Все"
+    row = [InlineKeyboardButton(text=all_text, callback_data=prefix.rsplit("_filter", maxsplit=1)[0])]
+    for status in REQUEST_STATUS_FILTERS:
+        label = format_request_status(status, compact=True)
+        if status == selected_status:
+            label = f"✓ {label}"
+        row.append(InlineKeyboardButton(text=label, callback_data=f"{prefix}:{status}"))
+
+    return row
+
+
+def _request_filter_text(status: str | None) -> str:
+    if status is None:
+        return "Фильтр: все"
+
+    return f"Фильтр: {format_request_status(status, compact=True)}"
+
+
+def _page_callback(prefix: str, page: int, status: str | None) -> str:
+    if status is None:
+        return f"{prefix}:{page}"
+
+    return f"{prefix}:{page}:{status}"
 
 
 def _page_count(total_count: int) -> int:
