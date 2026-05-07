@@ -20,6 +20,8 @@ yarn-error.log*
 
 # Runtime data
 data/
+exports/
+debug/
 
 # IDE and OS files
 .idea/
