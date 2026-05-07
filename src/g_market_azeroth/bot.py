@@ -1,30 +1,50 @@
 import asyncio
-import logging
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
-from aiogram.filters import CommandStart
-from aiogram.types import Message
 
-from g_market_azeroth.config import Settings
-
-
-async def handle_start(message: Message) -> None:
-    await message.answer("Привет!")
+from g_market_azeroth import admin, error_handlers, handlers
+from g_market_azeroth.config import load_settings
+from g_market_azeroth.database import MarketRepository
+from g_market_azeroth.logging import setup_logging
+from g_market_azeroth.middlewares.rate_limit import (
+    SupportCooldownMiddleware,
+    UserCooldownMiddleware,
+)
 
 
 async def run_bot() -> None:
-    settings = Settings.from_env()
+    settings = load_settings()
+    setup_logging(settings.log_level)
 
-    logging.basicConfig(
-        level=settings.log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    database = MarketRepository(Path(settings.database_path))
+    await database.init()
 
     bot = Bot(token=settings.bot_token)
-    dispatcher = Dispatcher()
-    dispatcher.message.register(handle_start, CommandStart())
+    dispatcher = Dispatcher(settings=settings, database=database)
+    dispatcher.message.middleware(
+        UserCooldownMiddleware(
+            cooldown_seconds=settings.message_cooldown_seconds,
+            skip_when_state_set=True,
+        )
+    )
+    dispatcher.message.middleware(
+        SupportCooldownMiddleware(cooldown_seconds=settings.support_cooldown_seconds)
+    )
+    dispatcher.callback_query.middleware(
+        UserCooldownMiddleware(
+            cooldown_seconds=settings.callback_cooldown_seconds,
+            answer_callbacks=True,
+        )
+    )
+    dispatcher.errors.register(error_handlers.handle_error)
+    dispatcher.include_router(admin.router)
+    dispatcher.include_router(handlers.router)
 
-    await dispatcher.start_polling(bot)
+    try:
+        await dispatcher.start_polling(bot)
+    finally:
+        await bot.session.close()
 
 
 def main() -> None:

@@ -84,3 +84,25 @@ docker compose up -d --build
 ```
 
 После этого бот будет работать через long polling, отдельный домен и webhook пока не нужны.
+
+## Backend Architecture
+
+The bot is organized as a small layered backend:
+
+```text
+handlers
+-> services
+-> repositories
+-> database facade
+```
+
+- `handlers.py` and `admin.py` own Telegram commands, callbacks, FSM transitions, and user/admin messages.
+- `services/` contains focused business helpers, including product validation and request status formatting.
+- `repositories/` contains SQLite query code for clients, products, purchase/sell requests, and support tickets.
+- `database.py` is the facade used by handlers; it initializes schemas and delegates database work to repositories.
+- CI runs source compilation and the pytest suite in GitHub Actions.
+- Tests currently cover configuration loading and error handlers.
+- Anti-spam is implemented by the rate-limit middleware and configurable cooldown settings.
+- Logging is initialized centrally in `logging.py`; audit logs record key user/admin actions and metric logs record lightweight analytics events.
+- `healthcheck.py` validates config, `BOT_TOKEN`, SQLite connectivity, and `SELECT 1` without calling Telegram.
+- `backup.py` creates timestamped SQLite backups in `backups/` and keeps the latest 10 files.
