@@ -33,10 +33,24 @@ class FunPayAuditReport:
     empty_price_rows_count: int
     any_server_rows_count: int
     any_faction_rows_count: int
+    rows_with_min_order_gold_count: int
+    rows_without_min_order_gold_count: int
     market_rows_after_filtering: int
     top_groups: tuple[FunPayGroupCount, ...]
     min_price_per_1000: float | None
     max_price_per_1000: float | None
+    latest_batch: FunPayLatestBatchAudit
+
+
+@dataclass(frozen=True, slots=True)
+class FunPayLatestBatchAudit:
+    created_at: str | None
+    raw_offers_count: int
+    rows_with_min_order_gold_count: int
+    rows_without_min_order_gold_count: int
+    empty_server_rows_count: int
+    empty_faction_rows_count: int
+    empty_price_rows_count: int
 
 
 def save_offers(db_path: Path, offers: list[FunPayOffer]) -> int:
@@ -113,6 +127,7 @@ def refresh_market_tables(
 
 def get_audit_report(db_path: Path) -> FunPayAuditReport:
     with sqlite3.connect(db_path) as connection:
+        latest_raw_created_at = _latest_raw_created_at(connection)
         return FunPayAuditReport(
             raw_offers_count=_safe_table_count(connection, RAW_OFFERS_TABLE),
             min_price_rows_count=_safe_table_count(connection, MIN_PRICE_TABLE),
@@ -122,10 +137,13 @@ def get_audit_report(db_path: Path) -> FunPayAuditReport:
             empty_price_rows_count=_raw_empty_count(connection, "price_per_1000"),
             any_server_rows_count=_raw_any_count(connection, "server", ANY_SERVER_VALUES),
             any_faction_rows_count=_raw_any_count(connection, "faction", ANY_FACTION_VALUES),
+            rows_with_min_order_gold_count=_raw_present_count(connection, "min_order_gold"),
+            rows_without_min_order_gold_count=_raw_missing_count(connection, "min_order_gold"),
             market_rows_after_filtering=_safe_table_count(connection, MIN_PRICE_TABLE),
             top_groups=_top_group_counts(connection),
             min_price_per_1000=_raw_price_bound(connection, "MIN"),
             max_price_per_1000=_raw_price_bound(connection, "MAX"),
+            latest_batch=_latest_batch_audit(connection, latest_raw_created_at),
         )
 
 
@@ -325,7 +343,7 @@ def _offer_to_row(offer: FunPayOffer, created_at: str) -> tuple[object, ...]:
         str(offer.offer_url),
         price_per_1000,
         offer.stock_gold,
-        None,
+        offer.min_order_gold,
         offer.description,
         offer.parsed_at.isoformat(),
         created_at,
@@ -384,6 +402,133 @@ def _raw_any_count(
         WHERE {column_name} IN ({placeholders})
         """,
         values,
+    ).fetchone()
+    return int(row[0])
+
+
+def _raw_present_count(connection: sqlite3.Connection, column_name: str) -> int:
+    if not _table_exists(connection, RAW_OFFERS_TABLE):
+        return 0
+
+    row = connection.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM {RAW_OFFERS_TABLE}
+        WHERE {column_name} IS NOT NULL
+        """
+    ).fetchone()
+    return int(row[0])
+
+
+def _raw_missing_count(connection: sqlite3.Connection, column_name: str) -> int:
+    if not _table_exists(connection, RAW_OFFERS_TABLE):
+        return 0
+
+    row = connection.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM {RAW_OFFERS_TABLE}
+        WHERE {column_name} IS NULL
+        """
+    ).fetchone()
+    return int(row[0])
+
+
+def _latest_batch_audit(
+    connection: sqlite3.Connection,
+    created_at: str | None,
+) -> FunPayLatestBatchAudit:
+    if created_at is None or not _table_exists(connection, RAW_OFFERS_TABLE):
+        return FunPayLatestBatchAudit(
+            created_at=None,
+            raw_offers_count=0,
+            rows_with_min_order_gold_count=0,
+            rows_without_min_order_gold_count=0,
+            empty_server_rows_count=0,
+            empty_faction_rows_count=0,
+            empty_price_rows_count=0,
+        )
+
+    return FunPayLatestBatchAudit(
+        created_at=created_at,
+        raw_offers_count=_raw_batch_count(connection, created_at),
+        rows_with_min_order_gold_count=_raw_batch_present_count(
+            connection,
+            "min_order_gold",
+            created_at,
+        ),
+        rows_without_min_order_gold_count=_raw_batch_missing_count(
+            connection,
+            "min_order_gold",
+            created_at,
+        ),
+        empty_server_rows_count=_raw_batch_empty_count(connection, "server", created_at),
+        empty_faction_rows_count=_raw_batch_empty_count(connection, "faction", created_at),
+        empty_price_rows_count=_raw_batch_empty_count(
+            connection,
+            "price_per_1000",
+            created_at,
+        ),
+    )
+
+
+def _raw_batch_count(connection: sqlite3.Connection, created_at: str) -> int:
+    row = connection.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM {RAW_OFFERS_TABLE}
+        WHERE created_at = ?
+        """,
+        (created_at,),
+    ).fetchone()
+    return int(row[0])
+
+
+def _raw_batch_present_count(
+    connection: sqlite3.Connection,
+    column_name: str,
+    created_at: str,
+) -> int:
+    row = connection.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM {RAW_OFFERS_TABLE}
+        WHERE created_at = ? AND {column_name} IS NOT NULL
+        """,
+        (created_at,),
+    ).fetchone()
+    return int(row[0])
+
+
+def _raw_batch_missing_count(
+    connection: sqlite3.Connection,
+    column_name: str,
+    created_at: str,
+) -> int:
+    row = connection.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM {RAW_OFFERS_TABLE}
+        WHERE created_at = ? AND {column_name} IS NULL
+        """,
+        (created_at,),
+    ).fetchone()
+    return int(row[0])
+
+
+def _raw_batch_empty_count(
+    connection: sqlite3.Connection,
+    column_name: str,
+    created_at: str,
+) -> int:
+    row = connection.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM {RAW_OFFERS_TABLE}
+        WHERE created_at = ?
+          AND ({column_name} IS NULL OR TRIM(CAST({column_name} AS TEXT)) = '')
+        """,
+        (created_at,),
     ).fetchone()
     return int(row[0])
 

@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
+
+import httpx
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -17,6 +20,7 @@ from g_market_azeroth.parsers.funpay.models import FunPayOffer
 from g_market_azeroth.parsers.funpay.parser import (
     ListingDebugReport,
     inspect_listing_page,
+    parse_offer_detail_page,
     parse_listing_page,
 )
 from g_market_azeroth.parsers.funpay.repository import (
@@ -49,6 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug-listing", action="store_true")
     parser.add_argument("--include-any-server", action="store_true")
     parser.add_argument("--include-any-faction", action="store_true")
+    parser.add_argument("--fetch-offer-details", action="store_true")
+    parser.add_argument("--detail-delay-seconds", type=float, default=1.0)
     return parser.parse_args()
 
 
@@ -84,6 +90,12 @@ def main() -> None:
         print(f"private offers: {len(private_offers)}")
 
         offers = official_offers + private_offers
+        if args.fetch_offer_details:
+            offers = _fetch_offer_details(
+                client,
+                offers,
+                delay_seconds=args.detail_delay_seconds,
+            )
 
     if args.dump_json:
         _dump_json(Path(args.dump_json), offers)
@@ -116,7 +128,44 @@ def main() -> None:
 
 
 def _should_fetch_pages(args: argparse.Namespace) -> bool:
-    return bool(args.save_db or args.dump_json or args.debug_listing)
+    return bool(
+        args.save_db
+        or args.dump_json
+        or args.debug_listing
+        or args.fetch_offer_details
+    )
+
+
+def _fetch_offer_details(
+    client: FunPayClient,
+    offers: list[FunPayOffer],
+    *,
+    delay_seconds: float,
+) -> list[FunPayOffer]:
+    enriched_offers: list[FunPayOffer] = []
+    found_count = 0
+
+    for index, offer in enumerate(offers):
+        min_order_gold = _fetch_min_order_gold(client, str(offer.offer_url))
+        if min_order_gold is not None:
+            found_count += 1
+            enriched_offers.append(offer.model_copy(update={"min_order_gold": min_order_gold}))
+        else:
+            enriched_offers.append(offer)
+
+        if index < len(offers) - 1 and delay_seconds > 0:
+            time.sleep(delay_seconds)
+
+    print(f"offer details fetched: {len(offers)}")
+    print(f"offers with min_order_gold: {found_count}")
+    return enriched_offers
+
+
+def _fetch_min_order_gold(client: FunPayClient, offer_url: str) -> int | None:
+    try:
+        return parse_offer_detail_page(client.get_text(offer_url))
+    except (httpx.HTTPError, ValueError):
+        return None
 
 
 def _dump_json(path: Path, offers: list[FunPayOffer]) -> None:
@@ -137,6 +186,8 @@ def _print_audit_report(report: FunPayAuditReport) -> None:
     print(f"rows with empty price_per_1000: {report.empty_price_rows_count}")
     print(f"raw rows with any server: {report.any_server_rows_count}")
     print(f"raw rows with any faction: {report.any_faction_rows_count}")
+    print(f"rows with min_order_gold: {report.rows_with_min_order_gold_count}")
+    print(f"rows without min_order_gold: {report.rows_without_min_order_gold_count}")
     print(f"market rows after filtering: {report.market_rows_after_filtering}")
     print(f"min price_per_1000: {report.min_price_per_1000}")
     print(f"max price_per_1000: {report.max_price_per_1000}")
@@ -146,6 +197,29 @@ def _print_audit_report(report: FunPayAuditReport) -> None:
             f"- {group.source_type} | {group.server} | "
             f"{group.faction}: {group.offers_count}"
         )
+    print("latest batch:")
+    print(f"latest batch created_at: {report.latest_batch.created_at}")
+    print(f"latest batch raw offers count: {report.latest_batch.raw_offers_count}")
+    print(
+        "latest batch rows with min_order_gold: "
+        f"{report.latest_batch.rows_with_min_order_gold_count}"
+    )
+    print(
+        "latest batch rows without min_order_gold: "
+        f"{report.latest_batch.rows_without_min_order_gold_count}"
+    )
+    print(
+        "latest batch rows with empty server: "
+        f"{report.latest_batch.empty_server_rows_count}"
+    )
+    print(
+        "latest batch rows with empty faction: "
+        f"{report.latest_batch.empty_faction_rows_count}"
+    )
+    print(
+        "latest batch rows with empty price_per_1000: "
+        f"{report.latest_batch.empty_price_rows_count}"
+    )
 
 
 def _save_debug_html(official_html: str, private_html: str) -> None:

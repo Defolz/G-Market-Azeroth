@@ -17,6 +17,7 @@ class FunPayOffer(BaseModel):
     seller_name: str | None = None
     price_per_1000: Decimal | None = Field(default=None, ge=0)
     stock_gold: int | None = Field(default=None, ge=0)
+    min_order_gold: int | None = Field(default=None, ge=0)
     description: str | None = None
 
 

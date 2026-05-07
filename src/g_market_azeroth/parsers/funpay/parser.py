@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urljoin
@@ -13,6 +14,16 @@ from g_market_azeroth.parsers.funpay.models import FunPayMarketSnapshot, FunPayO
 
 
 FUNPAY_BASE_URL = "https://funpay.com"
+MIN_ORDER_PATTERNS = (
+    re.compile(r"minimum(?:\s+order)?[^\d]{0,80}([\d\s.,]+)", re.IGNORECASE),
+    re.compile(r"min(?:imum)?\.?\s+order[^\d]{0,80}([\d\s.,]+)", re.IGNORECASE),
+    re.compile(
+        "\u043c\u0438\u043d\u0438\u043c"
+        "(?:\u0443\u043c|\u0430\u043b\u044c\u043d\u044b\u0439"
+        "\\s+\u0437\u0430\u043a\u0430\u0437)?[^\\d]{0,80}([\\d\\s.,]+)",
+        re.IGNORECASE,
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +85,16 @@ def inspect_listing_page(html: str) -> ListingDebugReport:
         server_links_count=len(server_links),
         sample_server_links=tuple(server_links[:10]),
     )
+
+
+def parse_offer_detail_page(html: str) -> int | None:
+    soup = BeautifulSoup(html, "lxml")
+    for line in soup.get_text("\n", strip=True).splitlines():
+        min_order_gold = _min_order_from_text(line)
+        if min_order_gold is not None:
+            return min_order_gold
+
+    return None
 
 
 class FunPayParser:
@@ -176,6 +197,27 @@ def _first_number(value: str) -> str | None:
 
     number = "".join(digits).replace(" ", "").replace("\u202f", "")
     return number if number and number != "." else None
+
+
+def _min_order_from_text(value: str) -> int | None:
+    for pattern in MIN_ORDER_PATTERNS:
+        match = pattern.search(value)
+        if match is None:
+            continue
+
+        number = _first_number(match.group(1))
+        if number is None:
+            continue
+
+        try:
+            amount = int(Decimal(number))
+        except InvalidOperation:
+            continue
+
+        if amount > 0:
+            return amount
+
+    return None
 
 
 def _server_links(soup: BeautifulSoup) -> list[str]:
