@@ -21,6 +21,7 @@ from g_market_azeroth.database import (
     SellRequestDetails,
     SupportTicket,
 )
+from g_market_azeroth.logging import log_admin_action
 
 router = Router(name="admin")
 
@@ -377,6 +378,12 @@ async def handle_purchase_status(
     if request is None:
         await callback.answer("Заявка не найдена.", show_alert=True)
         return
+    log_admin_action(
+        callback.from_user.id,
+        "purchase_request_status_changed",
+        request_id=request.id,
+        status=request.status,
+    )
 
     await _notify_user(
         bot,
@@ -413,6 +420,12 @@ async def handle_sell_status(
     if request is None:
         await callback.answer("Заявка не найдена.", show_alert=True)
         return
+    log_admin_action(
+        callback.from_user.id,
+        "sell_request_status_changed",
+        request_id=request.id,
+        status=request.status,
+    )
 
     await _notify_user(
         bot,
@@ -474,6 +487,11 @@ async def handle_support_close(
     if ticket is None:
         await callback.answer("Обращение не найдено.", show_alert=True)
         return
+    log_admin_action(
+        callback.from_user.id,
+        "support_ticket_closed",
+        ticket_id=ticket.id,
+    )
 
     await _notify_user(
         bot,
@@ -614,6 +632,15 @@ async def handle_product_price(
         price=price,
     )
     await state.clear()
+    if message.from_user:
+        log_admin_action(
+            message.from_user.id,
+            "product_created",
+            product_id=product.id,
+            realm_type=product.realm_type,
+            server=product.server,
+            side=product.side,
+        )
 
     await message.answer(
         "Товар добавлен.\n\n" + _format_product(product),
@@ -676,6 +703,12 @@ async def handle_change_price_value(
     if product is None:
         await message.answer("Товар не найден. Цена не изменена.", reply_markup=admin_keyboard())
         return
+    if message.from_user:
+        log_admin_action(
+            message.from_user.id,
+            "product_price_changed",
+            product_id=product.id,
+        )
 
     await message.answer(
         "Цена обновлена.\n\n" + _format_product(product),

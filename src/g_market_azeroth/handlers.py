@@ -20,6 +20,7 @@ from g_market_azeroth.database import (
     SellRequestDetails,
     SupportTicket,
 )
+from g_market_azeroth.logging import log_user_action
 
 router = Router(name="client")
 
@@ -217,6 +218,12 @@ async def handle_purchase(
         product_id=product.id,
         telegram_id=callback.from_user.id,
     )
+    log_user_action(
+        callback.from_user.id,
+        "purchase_request_created",
+        request_id=request.id,
+        product_id=product.id,
+    )
     await _notify_admins_about_purchase(bot, settings, request, product, callback.from_user)
 
     if isinstance(callback.message, Message):
@@ -324,6 +331,14 @@ async def handle_sell_comment(
         comment=None if comment == "-" else comment,
     )
     await state.clear()
+    log_user_action(
+        message.from_user.id,
+        "sell_request_created",
+        request_id=sell_request.id,
+        realm_type=sell_request.realm_type,
+        server=sell_request.server,
+        side=sell_request.side,
+    )
     await _notify_admins_about_sell_request(bot, settings, sell_request, message.from_user)
 
     await message.answer(
@@ -356,6 +371,11 @@ async def handle_support_question(
         question=question,
     )
     await state.clear()
+    log_user_action(
+        message.from_user.id,
+        "support_request_created",
+        ticket_id=ticket.id,
+    )
     await _notify_admins_about_support_ticket(bot, settings, ticket, message.from_user)
 
     await message.answer(
