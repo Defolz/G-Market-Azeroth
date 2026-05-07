@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 from g_market_azeroth.catalog import request_status_label
+from g_market_azeroth.constants import (
+    REQUEST_STATUS_CANCELLED,
+    REQUEST_STATUS_DONE,
+    REQUEST_STATUS_IN_PROGRESS,
+    REQUEST_STATUS_NEW,
+)
 
 
 _STATUS_ICONS = {
-    "new": "🟡",
-    "in_progress": "🟠",
-    "completed": "🟢",
-    "cancelled": "🔴",
+    REQUEST_STATUS_NEW: "🟡",
+    REQUEST_STATUS_IN_PROGRESS: "🟠",
+    REQUEST_STATUS_DONE: "🟢",
+    REQUEST_STATUS_CANCELLED: "🔴",
 }
 _TIMELINE_STEPS = (
-    ("new", "Создана"),
-    ("in_progress", "В обработке"),
-    ("completed", "Выполнена"),
+    (REQUEST_STATUS_NEW, "Создана"),
+    (REQUEST_STATUS_IN_PROGRESS, "В обработке"),
+    (REQUEST_STATUS_DONE, "Выполнена"),
 )
 
 
@@ -22,7 +28,7 @@ def format_request_status(status: str, *, compact: bool = False) -> str:
     if compact:
         return f"{icon} {label}"
 
-    if status == "cancelled":
+    if status == REQUEST_STATUS_CANCELLED:
         return f"📦 Статус заявки: {icon} {label}"
 
     return "\n".join(

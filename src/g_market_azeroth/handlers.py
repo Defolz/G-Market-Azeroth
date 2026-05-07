@@ -12,6 +12,11 @@ from g_market_azeroth.catalog import (
     support_status_label,
 )
 from g_market_azeroth.config import Settings
+from g_market_azeroth.constants import (
+    REQUEST_STATUS_CANCELLED,
+    REQUEST_STATUS_DONE,
+    REQUEST_STATUS_IN_PROGRESS,
+)
 from g_market_azeroth.database import (
     MarketRepository,
     Product,
@@ -470,10 +475,10 @@ def admin_purchase_keyboard(request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="В работу", callback_data=f"admin:purchase_status:{request_id}:in_progress"),
-                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:purchase_status:{request_id}:completed"),
+                InlineKeyboardButton(text="В работу", callback_data=f"admin:purchase_status:{request_id}:{REQUEST_STATUS_IN_PROGRESS}"),
+                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:purchase_status:{request_id}:{REQUEST_STATUS_DONE}"),
             ],
-            [InlineKeyboardButton(text="Отменить", callback_data=f"admin:purchase_status:{request_id}:cancelled")],
+            [InlineKeyboardButton(text="Отменить", callback_data=f"admin:purchase_status:{request_id}:{REQUEST_STATUS_CANCELLED}")],
         ]
     )
 
@@ -482,10 +487,10 @@ def admin_sell_keyboard(request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="В работу", callback_data=f"admin:sell_status:{request_id}:in_progress"),
-                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:sell_status:{request_id}:completed"),
+                InlineKeyboardButton(text="В работу", callback_data=f"admin:sell_status:{request_id}:{REQUEST_STATUS_IN_PROGRESS}"),
+                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:sell_status:{request_id}:{REQUEST_STATUS_DONE}"),
             ],
-            [InlineKeyboardButton(text="Отменить", callback_data=f"admin:sell_status:{request_id}:cancelled")],
+            [InlineKeyboardButton(text="Отменить", callback_data=f"admin:sell_status:{request_id}:{REQUEST_STATUS_CANCELLED}")],
         ]
     )
 

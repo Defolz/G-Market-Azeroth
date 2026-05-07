@@ -12,6 +12,12 @@ from g_market_azeroth.catalog import (
     support_status_label,
 )
 from g_market_azeroth.config import Settings
+from g_market_azeroth.constants import (
+    REQUEST_STATUS_CANCELLED,
+    REQUEST_STATUS_DONE,
+    REQUEST_STATUS_IN_PROGRESS,
+    REQUEST_STATUS_NEW,
+)
 from g_market_azeroth.database import (
     Client,
     MarketRepository,
@@ -792,11 +798,11 @@ def purchase_request_actions_keyboard(request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="В работу", callback_data=f"admin:purchase_status:{request_id}:in_progress"),
-                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:purchase_status:{request_id}:completed"),
+                InlineKeyboardButton(text="В работу", callback_data=f"admin:purchase_status:{request_id}:{REQUEST_STATUS_IN_PROGRESS}"),
+                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:purchase_status:{request_id}:{REQUEST_STATUS_DONE}"),
             ],
             [
-                InlineKeyboardButton(text="Отменить", callback_data=f"admin:purchase_status:{request_id}:cancelled"),
+                InlineKeyboardButton(text="Отменить", callback_data=f"admin:purchase_status:{request_id}:{REQUEST_STATUS_CANCELLED}"),
                 InlineKeyboardButton(text="К списку", callback_data="admin:requests"),
             ],
         ]
@@ -816,11 +822,11 @@ def sell_request_actions_keyboard(request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="В работу", callback_data=f"admin:sell_status:{request_id}:in_progress"),
-                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:sell_status:{request_id}:completed"),
+                InlineKeyboardButton(text="В работу", callback_data=f"admin:sell_status:{request_id}:{REQUEST_STATUS_IN_PROGRESS}"),
+                InlineKeyboardButton(text="Закрыть", callback_data=f"admin:sell_status:{request_id}:{REQUEST_STATUS_DONE}"),
             ],
             [
-                InlineKeyboardButton(text="Отменить", callback_data=f"admin:sell_status:{request_id}:cancelled"),
+                InlineKeyboardButton(text="Отменить", callback_data=f"admin:sell_status:{request_id}:{REQUEST_STATUS_CANCELLED}"),
                 InlineKeyboardButton(text="К списку", callback_data="admin:sell_requests"),
             ],
         ]
@@ -852,11 +858,11 @@ async def _stats_text(database: MarketRepository) -> str:
     clients_count = await database.count_clients()
     products_count = await database.count_products()
     purchase_count = await database.count_purchase_requests()
-    purchase_new_count = await database.count_purchase_requests(status="new")
+    purchase_new_count = await database.count_purchase_requests(status=REQUEST_STATUS_NEW)
     sell_count = await database.count_sell_requests()
-    sell_new_count = await database.count_sell_requests(status="new")
+    sell_new_count = await database.count_sell_requests(status=REQUEST_STATUS_NEW)
     support_count = await database.count_support_tickets()
-    support_new_count = await database.count_support_tickets(status="new")
+    support_new_count = await database.count_support_tickets(status=REQUEST_STATUS_NEW)
 
     return (
         "Статистика\n\n"
