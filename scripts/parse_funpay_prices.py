@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import time
+from uuid import uuid4
 from pathlib import Path
 
 import httpx
@@ -63,6 +64,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    batch_id = str(uuid4())
     offers: list[FunPayOffer] = []
 
     if _should_fetch_pages(args):
@@ -108,7 +110,7 @@ def main() -> None:
         _dump_json(Path(args.dump_json), offers)
 
     if args.save_db:
-        saved_count = save_offers(Path(args.db_path), offers)
+        saved_count = save_offers(Path(args.db_path), offers, batch_id=batch_id)
         print(f"saved offers: {saved_count}")
 
     if args.refresh_market:
@@ -240,6 +242,7 @@ def _print_audit_report(report: FunPayAuditReport) -> None:
             f"{group.faction}: {group.offers_count}"
         )
     print("latest batch:")
+    print(f"latest batch id: {report.latest_batch.batch_id}")
     print(f"latest batch created_at: {report.latest_batch.created_at}")
     print(f"latest batch raw offers count: {report.latest_batch.raw_offers_count}")
     print(

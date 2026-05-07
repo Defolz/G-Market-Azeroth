@@ -45,6 +45,7 @@ class FunPayAuditReport:
 
 @dataclass(frozen=True, slots=True)
 class FunPayLatestBatchAudit:
+    batch_id: str | None
     created_at: str | None
     raw_offers_count: int
     rows_with_min_order_gold_count: int
@@ -54,7 +55,7 @@ class FunPayLatestBatchAudit:
     empty_price_rows_count: int
 
 
-def save_offers(db_path: Path, offers: list[FunPayOffer]) -> int:
+def save_offers(db_path: Path, offers: list[FunPayOffer], *, batch_id: str) -> int:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     created_at = datetime.now(UTC).isoformat()
 
@@ -73,11 +74,12 @@ def save_offers(db_path: Path, offers: list[FunPayOffer]) -> int:
                 min_order_gold,
                 description,
                 parsed_at,
-                created_at
+                created_at,
+                batch_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [_offer_to_row(offer, created_at) for offer in offers],
+            [_offer_to_row(offer, created_at, batch_id) for offer in offers],
         )
 
     return len(offers)
@@ -94,11 +96,11 @@ def refresh_market_tables(
 
     with sqlite3.connect(db_path) as connection:
         _init_schema(connection)
-        latest_raw_created_at = _latest_raw_created_at(connection)
+        latest_batch_id = _latest_raw_batch_id(connection)
         connection.execute(f"DELETE FROM {MIN_PRICE_TABLE}")
         connection.execute(f"DELETE FROM {BEST_ENTRY_TABLE}")
 
-        if latest_raw_created_at is None:
+        if latest_batch_id is None:
             return (0, 0)
 
         filter_sql, filter_params = _market_filter_sql(
@@ -107,14 +109,14 @@ def refresh_market_tables(
         )
         _refresh_min_price_table(
             connection,
-            latest_raw_created_at,
+            latest_batch_id,
             created_at,
             filter_sql,
             filter_params,
         )
         _refresh_best_entry_table(
             connection,
-            latest_raw_created_at,
+            latest_batch_id,
             created_at,
             filter_sql,
             filter_params,
@@ -128,7 +130,8 @@ def refresh_market_tables(
 
 def get_audit_report(db_path: Path) -> FunPayAuditReport:
     with sqlite3.connect(db_path) as connection:
-        latest_raw_created_at = _latest_raw_created_at(connection)
+        _init_schema(connection)
+        latest_batch_id = _latest_raw_batch_id(connection)
         return FunPayAuditReport(
             raw_offers_count=_safe_table_count(connection, RAW_OFFERS_TABLE),
             min_price_rows_count=_safe_table_count(connection, MIN_PRICE_TABLE),
@@ -140,7 +143,7 @@ def get_audit_report(db_path: Path) -> FunPayAuditReport:
             any_faction_rows_count=_raw_any_count(connection, "faction", ANY_FACTION_VALUES),
             ignored_any_market_rows_count=_latest_ignored_any_count(
                 connection,
-                latest_raw_created_at,
+                latest_batch_id,
             ),
             rows_with_min_order_gold_count=_raw_present_count(connection, "min_order_gold"),
             rows_without_min_order_gold_count=_raw_missing_count(connection, "min_order_gold"),
@@ -148,13 +151,13 @@ def get_audit_report(db_path: Path) -> FunPayAuditReport:
             top_groups=_top_group_counts(connection),
             min_price_per_1000=_raw_price_bound(connection, "MIN"),
             max_price_per_1000=_raw_price_bound(connection, "MAX"),
-            latest_batch=_latest_batch_audit(connection, latest_raw_created_at),
+            latest_batch=_latest_batch_audit(connection, latest_batch_id),
         )
 
 
 def _refresh_min_price_table(
     connection: sqlite3.Connection,
-    raw_created_at: str,
+    batch_id: str,
     created_at: str,
     filter_sql: str,
     filter_params: tuple[str, ...],
@@ -192,20 +195,20 @@ def _refresh_min_price_table(
                     ORDER BY price_per_1000 ASC, id ASC
                 ) AS rank
             FROM {RAW_OFFERS_TABLE}
-            WHERE created_at = ?
+            WHERE batch_id = ?
               AND server IS NOT NULL
               AND price_per_1000 IS NOT NULL
               {filter_sql}
         )
         WHERE rank = 1
         """,
-        (created_at, raw_created_at, *filter_params),
+        (created_at, batch_id, *filter_params),
     )
 
 
 def _refresh_best_entry_table(
     connection: sqlite3.Connection,
-    raw_created_at: str,
+    batch_id: str,
     created_at: str,
     filter_sql: str,
     filter_params: tuple[str, ...],
@@ -249,14 +252,14 @@ def _refresh_best_entry_table(
                         id ASC
                 ) AS rank
             FROM {RAW_OFFERS_TABLE}
-            WHERE created_at = ?
+            WHERE batch_id = ?
               AND server IS NOT NULL
               AND price_per_1000 IS NOT NULL
               {filter_sql}
         )
         WHERE rank = 1
         """,
-        (created_at, raw_created_at, *filter_params),
+        (created_at, batch_id, *filter_params),
     )
 
 
@@ -297,10 +300,12 @@ def _init_schema(connection: sqlite3.Connection) -> None:
             min_order_gold INTEGER NULL,
             description TEXT,
             parsed_at TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            batch_id TEXT
         )
         """
     )
+    _ensure_column(connection, RAW_OFFERS_TABLE, "batch_id", "TEXT")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS funpay_market_min_price (
@@ -337,7 +342,7 @@ def _init_schema(connection: sqlite3.Connection) -> None:
     )
 
 
-def _offer_to_row(offer: FunPayOffer, created_at: str) -> tuple[object, ...]:
+def _offer_to_row(offer: FunPayOffer, created_at: str, batch_id: str) -> tuple[object, ...]:
     price_per_1000 = float(offer.price_per_1000) if offer.price_per_1000 is not None else None
 
     return (
@@ -352,14 +357,21 @@ def _offer_to_row(offer: FunPayOffer, created_at: str) -> tuple[object, ...]:
         offer.description,
         offer.parsed_at.isoformat(),
         created_at,
+        batch_id,
     )
 
 
-def _latest_raw_created_at(connection: sqlite3.Connection) -> str | None:
+def _latest_raw_batch_id(connection: sqlite3.Connection) -> str | None:
+    if not _table_exists(connection, RAW_OFFERS_TABLE):
+        return None
+
     row = connection.execute(
         """
-        SELECT MAX(created_at)
+        SELECT batch_id
         FROM funpay_offers_raw
+        WHERE batch_id IS NOT NULL AND batch_id != ''
+        ORDER BY id DESC
+        LIMIT 1
         """
     ).fetchone()
     return str(row[0]) if row and row[0] is not None else None
@@ -413,9 +425,9 @@ def _raw_any_count(
 
 def _latest_ignored_any_count(
     connection: sqlite3.Connection,
-    created_at: str | None,
+    batch_id: str | None,
 ) -> int:
-    if created_at is None or not _table_exists(connection, RAW_OFFERS_TABLE):
+    if batch_id is None or not _table_exists(connection, RAW_OFFERS_TABLE):
         return 0
 
     server_placeholders = ", ".join("?" for _ in ANY_SERVER_VALUES)
@@ -424,13 +436,13 @@ def _latest_ignored_any_count(
         f"""
         SELECT COUNT(*)
         FROM {RAW_OFFERS_TABLE}
-        WHERE created_at = ?
+        WHERE batch_id = ?
           AND (
               server IN ({server_placeholders})
               OR faction IN ({faction_placeholders})
           )
         """,
-        (created_at, *ANY_SERVER_VALUES, *ANY_FACTION_VALUES),
+        (batch_id, *ANY_SERVER_VALUES, *ANY_FACTION_VALUES),
     ).fetchone()
     return int(row[0])
 
@@ -465,10 +477,11 @@ def _raw_missing_count(connection: sqlite3.Connection, column_name: str) -> int:
 
 def _latest_batch_audit(
     connection: sqlite3.Connection,
-    created_at: str | None,
+    batch_id: str | None,
 ) -> FunPayLatestBatchAudit:
-    if created_at is None or not _table_exists(connection, RAW_OFFERS_TABLE):
+    if batch_id is None or not _table_exists(connection, RAW_OFFERS_TABLE):
         return FunPayLatestBatchAudit(
+            batch_id=None,
             created_at=None,
             raw_offers_count=0,
             rows_with_min_order_gold_count=0,
@@ -479,36 +492,49 @@ def _latest_batch_audit(
         )
 
     return FunPayLatestBatchAudit(
-        created_at=created_at,
-        raw_offers_count=_raw_batch_count(connection, created_at),
+        batch_id=batch_id,
+        created_at=_raw_batch_created_at(connection, batch_id),
+        raw_offers_count=_raw_batch_count(connection, batch_id),
         rows_with_min_order_gold_count=_raw_batch_present_count(
             connection,
             "min_order_gold",
-            created_at,
+            batch_id,
         ),
         rows_without_min_order_gold_count=_raw_batch_missing_count(
             connection,
             "min_order_gold",
-            created_at,
+            batch_id,
         ),
-        empty_server_rows_count=_raw_batch_empty_count(connection, "server", created_at),
-        empty_faction_rows_count=_raw_batch_empty_count(connection, "faction", created_at),
+        empty_server_rows_count=_raw_batch_empty_count(connection, "server", batch_id),
+        empty_faction_rows_count=_raw_batch_empty_count(connection, "faction", batch_id),
         empty_price_rows_count=_raw_batch_empty_count(
             connection,
             "price_per_1000",
-            created_at,
+            batch_id,
         ),
     )
 
 
-def _raw_batch_count(connection: sqlite3.Connection, created_at: str) -> int:
+def _raw_batch_created_at(connection: sqlite3.Connection, batch_id: str) -> str | None:
+    row = connection.execute(
+        f"""
+        SELECT MIN(created_at)
+        FROM {RAW_OFFERS_TABLE}
+        WHERE batch_id = ?
+        """,
+        (batch_id,),
+    ).fetchone()
+    return str(row[0]) if row and row[0] is not None else None
+
+
+def _raw_batch_count(connection: sqlite3.Connection, batch_id: str) -> int:
     row = connection.execute(
         f"""
         SELECT COUNT(*)
         FROM {RAW_OFFERS_TABLE}
-        WHERE created_at = ?
+        WHERE batch_id = ?
         """,
-        (created_at,),
+        (batch_id,),
     ).fetchone()
     return int(row[0])
 
@@ -516,15 +542,15 @@ def _raw_batch_count(connection: sqlite3.Connection, created_at: str) -> int:
 def _raw_batch_present_count(
     connection: sqlite3.Connection,
     column_name: str,
-    created_at: str,
+    batch_id: str,
 ) -> int:
     row = connection.execute(
         f"""
         SELECT COUNT(*)
         FROM {RAW_OFFERS_TABLE}
-        WHERE created_at = ? AND {column_name} IS NOT NULL
+        WHERE batch_id = ? AND {column_name} IS NOT NULL
         """,
-        (created_at,),
+        (batch_id,),
     ).fetchone()
     return int(row[0])
 
@@ -532,15 +558,15 @@ def _raw_batch_present_count(
 def _raw_batch_missing_count(
     connection: sqlite3.Connection,
     column_name: str,
-    created_at: str,
+    batch_id: str,
 ) -> int:
     row = connection.execute(
         f"""
         SELECT COUNT(*)
         FROM {RAW_OFFERS_TABLE}
-        WHERE created_at = ? AND {column_name} IS NULL
+        WHERE batch_id = ? AND {column_name} IS NULL
         """,
-        (created_at,),
+        (batch_id,),
     ).fetchone()
     return int(row[0])
 
@@ -548,16 +574,16 @@ def _raw_batch_missing_count(
 def _raw_batch_empty_count(
     connection: sqlite3.Connection,
     column_name: str,
-    created_at: str,
+    batch_id: str,
 ) -> int:
     row = connection.execute(
         f"""
         SELECT COUNT(*)
         FROM {RAW_OFFERS_TABLE}
-        WHERE created_at = ?
+        WHERE batch_id = ?
           AND ({column_name} IS NULL OR TRIM(CAST({column_name} AS TEXT)) = '')
         """,
-        (created_at,),
+        (batch_id,),
     ).fetchone()
     return int(row[0])
 
@@ -610,3 +636,22 @@ def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
         (table_name,),
     ).fetchone()
     return row is not None
+
+
+def _column_exists(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+) -> bool:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(str(row[1]) == column_name for row in rows)
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_type: str,
+) -> None:
+    if not _column_exists(connection, table_name, column_name):
+        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")

@@ -21,7 +21,8 @@ SELECT
     min_order_gold,
     description,
     parsed_at,
-    created_at
+    created_at,
+    batch_id
 FROM funpay_offers_raw
 ORDER BY id
 """
