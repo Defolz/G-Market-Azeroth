@@ -10,6 +10,9 @@ class Settings:
     admin_ids: set[int]
     database_path: str
     log_level: str
+    message_cooldown_seconds: float
+    callback_cooldown_seconds: float
+    support_cooldown_seconds: float
 
 
 # future:
@@ -25,12 +28,27 @@ def load_settings() -> Settings:
     admin_ids = _parse_admin_ids(_get_required_env("ADMIN_IDS"))
     database_path = _get_required_env("DATABASE_PATH")
     log_level = _get_optional_env("LOG_LEVEL", default="INFO")
+    message_cooldown_seconds = _parse_optional_float_env(
+        "MESSAGE_COOLDOWN_SECONDS",
+        default=1.0,
+    )
+    callback_cooldown_seconds = _parse_optional_float_env(
+        "CALLBACK_COOLDOWN_SECONDS",
+        default=0.5,
+    )
+    support_cooldown_seconds = _parse_optional_float_env(
+        "SUPPORT_COOLDOWN_SECONDS",
+        default=10.0,
+    )
 
     return Settings(
         bot_token=bot_token,
         admin_ids=admin_ids,
         database_path=database_path,
         log_level=log_level,
+        message_cooldown_seconds=message_cooldown_seconds,
+        callback_cooldown_seconds=callback_cooldown_seconds,
+        support_cooldown_seconds=support_cooldown_seconds,
     )
 
 
@@ -53,6 +71,19 @@ def _get_optional_env(name: str, *, default: str) -> str:
 
     value = value.strip()
     return value or default
+
+
+def _parse_optional_float_env(name: str, *, default: float) -> float:
+    value = _get_optional_env(name, default=str(default))
+    try:
+        parsed_value = float(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number.") from exc
+
+    if parsed_value < 0:
+        raise RuntimeError(f"{name} must be greater than or equal to 0.")
+
+    return parsed_value
 
 
 def _parse_admin_ids(raw_value: str) -> set[int]:
