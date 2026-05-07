@@ -1,1 +1,7 @@
-.
+aiogram==3.21.0
+beautifulsoup4
+httpx
+lxml
+openpyxl
+pydantic
+python-dotenv==1.1.1
