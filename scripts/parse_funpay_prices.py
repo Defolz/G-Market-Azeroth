@@ -51,10 +51,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--export", action="store_true")
     parser.add_argument("--audit", action="store_true")
     parser.add_argument("--debug-listing", action="store_true")
-    parser.add_argument("--include-any-server", action="store_true")
-    parser.add_argument("--include-any-faction", action="store_true")
     parser.add_argument("--fetch-offer-details", action="store_true")
     parser.add_argument("--detail-delay-seconds", type=float, default=1.0)
+    parser.add_argument("--max-detail-offers", type=int, default=None)
+    parser.add_argument("--detail-progress-every", type=int, default=50)
     return parser.parse_args()
 
 
@@ -91,10 +91,14 @@ def main() -> None:
 
         offers = official_offers + private_offers
         if args.fetch_offer_details:
+            if args.limit is None and args.max_detail_offers is None:
+                print("warning: fetching details for all offers may take a long time")
             offers = _fetch_offer_details(
                 client,
                 offers,
                 delay_seconds=args.detail_delay_seconds,
+                max_detail_offers=args.max_detail_offers,
+                progress_every=args.detail_progress_every,
             )
 
     if args.dump_json:
@@ -105,11 +109,7 @@ def main() -> None:
         print(f"saved offers: {saved_count}")
 
     if args.refresh_market:
-        min_price_count, best_entry_count = refresh_market_tables(
-            Path(args.db_path),
-            exclude_any_server=not args.include_any_server,
-            exclude_any_faction=not args.include_any_faction,
-        )
+        min_price_count, best_entry_count = refresh_market_tables(Path(args.db_path))
         print(f"market min price rows: {min_price_count}")
         print(f"market best entry rows: {best_entry_count}")
 
@@ -141,24 +141,43 @@ def _fetch_offer_details(
     offers: list[FunPayOffer],
     *,
     delay_seconds: float,
+    max_detail_offers: int | None,
+    progress_every: int,
 ) -> list[FunPayOffer]:
-    enriched_offers: list[FunPayOffer] = []
+    detail_offers = offers[:max_detail_offers] if max_detail_offers is not None else offers
+    enriched_offers: list[FunPayOffer] = list(offers)
     found_count = 0
 
-    for index, offer in enumerate(offers):
+    for index, offer in enumerate(detail_offers):
         min_order_gold = _fetch_min_order_gold(client, str(offer.offer_url))
         if min_order_gold is not None:
             found_count += 1
-            enriched_offers.append(offer.model_copy(update={"min_order_gold": min_order_gold}))
-        else:
-            enriched_offers.append(offer)
+            enriched_offers[index] = offer.model_copy(update={"min_order_gold": min_order_gold})
 
-        if index < len(offers) - 1 and delay_seconds > 0:
+        completed_count = index + 1
+        if _should_print_detail_progress(completed_count, len(detail_offers), progress_every):
+            print(f"offer details progress: {completed_count}/{len(detail_offers)}")
+
+        if index < len(detail_offers) - 1 and delay_seconds > 0:
             time.sleep(delay_seconds)
 
-    print(f"offer details fetched: {len(offers)}")
+    print(f"offer details fetched: {len(detail_offers)}")
     print(f"offers with min_order_gold: {found_count}")
     return enriched_offers
+
+
+def _should_print_detail_progress(
+    completed_count: int,
+    total_count: int,
+    progress_every: int,
+) -> bool:
+    if total_count == 0:
+        return False
+
+    if completed_count == total_count:
+        return True
+
+    return progress_every > 0 and completed_count % progress_every == 0
 
 
 def _fetch_min_order_gold(client: FunPayClient, offer_url: str) -> int | None:
@@ -186,6 +205,10 @@ def _print_audit_report(report: FunPayAuditReport) -> None:
     print(f"rows with empty price_per_1000: {report.empty_price_rows_count}")
     print(f"raw rows with any server: {report.any_server_rows_count}")
     print(f"raw rows with any faction: {report.any_faction_rows_count}")
+    print(
+        "ignored any server/faction rows in market tables: "
+        f"{report.ignored_any_market_rows_count}"
+    )
     print(f"rows with min_order_gold: {report.rows_with_min_order_gold_count}")
     print(f"rows without min_order_gold: {report.rows_without_min_order_gold_count}")
     print(f"market rows after filtering: {report.market_rows_after_filtering}")

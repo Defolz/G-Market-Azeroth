@@ -33,6 +33,7 @@ class FunPayAuditReport:
     empty_price_rows_count: int
     any_server_rows_count: int
     any_faction_rows_count: int
+    ignored_any_market_rows_count: int
     rows_with_min_order_gold_count: int
     rows_without_min_order_gold_count: int
     market_rows_after_filtering: int
@@ -137,6 +138,10 @@ def get_audit_report(db_path: Path) -> FunPayAuditReport:
             empty_price_rows_count=_raw_empty_count(connection, "price_per_1000"),
             any_server_rows_count=_raw_any_count(connection, "server", ANY_SERVER_VALUES),
             any_faction_rows_count=_raw_any_count(connection, "faction", ANY_FACTION_VALUES),
+            ignored_any_market_rows_count=_latest_ignored_any_count(
+                connection,
+                latest_raw_created_at,
+            ),
             rows_with_min_order_gold_count=_raw_present_count(connection, "min_order_gold"),
             rows_without_min_order_gold_count=_raw_missing_count(connection, "min_order_gold"),
             market_rows_after_filtering=_safe_table_count(connection, MIN_PRICE_TABLE),
@@ -402,6 +407,30 @@ def _raw_any_count(
         WHERE {column_name} IN ({placeholders})
         """,
         values,
+    ).fetchone()
+    return int(row[0])
+
+
+def _latest_ignored_any_count(
+    connection: sqlite3.Connection,
+    created_at: str | None,
+) -> int:
+    if created_at is None or not _table_exists(connection, RAW_OFFERS_TABLE):
+        return 0
+
+    server_placeholders = ", ".join("?" for _ in ANY_SERVER_VALUES)
+    faction_placeholders = ", ".join("?" for _ in ANY_FACTION_VALUES)
+    row = connection.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM {RAW_OFFERS_TABLE}
+        WHERE created_at = ?
+          AND (
+              server IN ({server_placeholders})
+              OR faction IN ({faction_placeholders})
+          )
+        """,
+        (created_at, *ANY_SERVER_VALUES, *ANY_FACTION_VALUES),
     ).fetchone()
     return int(row[0])
 
