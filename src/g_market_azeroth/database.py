@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from contextlib import closing
-from dataclasses import dataclass
 from pathlib import Path
 
+from g_market_azeroth.repositories.clients import Client, ClientsRepository
 from g_market_azeroth.repositories.products import Product, ProductsRepository
 from g_market_azeroth.repositories.requests import (
     PurchaseRequest,
@@ -15,20 +15,6 @@ from g_market_azeroth.repositories.requests import (
 )
 from g_market_azeroth.repositories.support import SupportMessage, SupportRepository, SupportTicket
 from g_market_azeroth.services.products import ProductService
-
-
-@dataclass(frozen=True)
-class Client:
-    telegram_id: int
-    username: str | None
-    first_name: str | None
-    last_name: str | None
-    language_code: str | None
-    is_bot: bool
-    start_count: int
-    created_at: str
-    updated_at: str
-    last_seen_at: str
 
 
 class MarketRepository:
@@ -60,6 +46,9 @@ class MarketRepository:
 
     async def count_clients(self) -> int:
         return await asyncio.to_thread(self._count_clients_sync)
+
+    async def get_client(self, telegram_id: int) -> Client | None:
+        return await asyncio.to_thread(self._get_client_sync, telegram_id)
 
     async def latest_clients(self, limit: int = 10) -> list[Client]:
         return await asyncio.to_thread(self._latest_clients_sync, limit)
@@ -292,28 +281,7 @@ class MarketRepository:
             connection.commit()
 
     def _create_clients_table(self, connection: sqlite3.Connection) -> None:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS clients (
-                telegram_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                last_name TEXT,
-                language_code TEXT,
-                is_bot INTEGER NOT NULL DEFAULT 0,
-                start_count INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_clients_last_seen_at
-            ON clients(last_seen_at DESC)
-            """
-        )
+        ClientsRepository(connection).init_schema()
 
     def _create_products_table(self, connection: sqlite3.Connection) -> None:
         ProductsRepository(connection).init_schema()
@@ -424,68 +392,27 @@ class MarketRepository:
         is_bot: bool,
     ) -> None:
         with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                INSERT INTO clients (
-                    telegram_id,
-                    username,
-                    first_name,
-                    last_name,
-                    language_code,
-                    is_bot,
-                    start_count
-                )
-                VALUES (?, ?, ?, ?, ?, ?, 1)
-                ON CONFLICT(telegram_id) DO UPDATE SET
-                    username = excluded.username,
-                    first_name = excluded.first_name,
-                    last_name = excluded.last_name,
-                    language_code = excluded.language_code,
-                    is_bot = excluded.is_bot,
-                    start_count = clients.start_count + 1,
-                    updated_at = CURRENT_TIMESTAMP,
-                    last_seen_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    telegram_id,
-                    username,
-                    first_name,
-                    last_name,
-                    language_code,
-                    int(is_bot),
-                ),
+            ClientsRepository(connection).upsert_client(
+                telegram_id=telegram_id,
+                username=username,
+                first_name=first_name,
+                last_name=last_name,
+                language_code=language_code,
+                is_bot=is_bot,
             )
             connection.commit()
 
     def _count_clients_sync(self) -> int:
         with closing(self._connect()) as connection:
-            row = connection.execute("SELECT COUNT(*) AS count FROM clients").fetchone()
+            return ClientsRepository(connection).count_clients()
 
-        return int(row["count"])
+    def _get_client_sync(self, telegram_id: int) -> Client | None:
+        with closing(self._connect()) as connection:
+            return ClientsRepository(connection).get_client(telegram_id)
 
     def _latest_clients_sync(self, limit: int) -> list[Client]:
         with closing(self._connect()) as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                    telegram_id,
-                    username,
-                    first_name,
-                    last_name,
-                    language_code,
-                    is_bot,
-                    start_count,
-                    created_at,
-                    updated_at,
-                    last_seen_at
-                FROM clients
-                ORDER BY last_seen_at DESC, created_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-
-        return [_client_from_row(row) for row in rows]
+            return ClientsRepository(connection).latest_clients(limit)
 
     def _create_catalog_product_sync(self, realm_type: str, server: str, side: str, price: str) -> Product:
         with closing(self._connect()) as connection:
@@ -731,18 +658,3 @@ class MarketRepository:
 
 
 ClientRepository = MarketRepository
-
-
-def _client_from_row(row: sqlite3.Row) -> Client:
-    return Client(
-        telegram_id=int(row["telegram_id"]),
-        username=row["username"],
-        first_name=row["first_name"],
-        last_name=row["last_name"],
-        language_code=row["language_code"],
-        is_bot=bool(row["is_bot"]),
-        start_count=int(row["start_count"]),
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-        last_seen_at=row["last_seen_at"],
-    )
