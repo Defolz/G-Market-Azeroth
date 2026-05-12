@@ -5,6 +5,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+from g_market_azeroth.repositories.catalog_sync_audit import CatalogSyncAudit, CatalogSyncAuditRepository
 from g_market_azeroth.repositories.clients import Client, ClientsRepository
 from g_market_azeroth.repositories.products import Product, ProductsRepository
 from g_market_azeroth.repositories.requests import (
@@ -266,6 +267,29 @@ class MarketRepository:
     async def list_support_messages(self, ticket_id: int) -> list[SupportMessage]:
         return await asyncio.to_thread(self._list_support_messages_sync, ticket_id)
 
+    async def create_catalog_sync_audit(
+        self,
+        *,
+        admin_telegram_id: int,
+        created_count: int,
+        updated_count: int,
+        hidden_count: int,
+        error_count: int,
+        status: str,
+    ) -> CatalogSyncAudit:
+        return await asyncio.to_thread(
+            self._create_catalog_sync_audit_sync,
+            admin_telegram_id,
+            created_count,
+            updated_count,
+            hidden_count,
+            error_count,
+            status,
+        )
+
+    async def latest_catalog_sync_audits(self, limit: int = 10) -> list[CatalogSyncAudit]:
+        return await asyncio.to_thread(self._latest_catalog_sync_audits_sync, limit)
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path)
         connection.row_factory = sqlite3.Row
@@ -281,6 +305,7 @@ class MarketRepository:
             self._create_purchase_requests_table(connection)
             self._create_sell_requests_table(connection)
             self._create_support_tickets_table(connection)
+            self._create_catalog_sync_audit_table(connection)
             connection.commit()
 
     def _create_clients_table(self, connection: sqlite3.Connection) -> None:
@@ -368,6 +393,9 @@ class MarketRepository:
 
     def _create_support_tickets_table(self, connection: sqlite3.Connection) -> None:
         SupportRepository(connection).init_schema()
+
+    def _create_catalog_sync_audit_table(self, connection: sqlite3.Connection) -> None:
+        CatalogSyncAuditRepository(connection).init_schema()
 
     def _ensure_columns(
         self,
@@ -672,6 +700,32 @@ class MarketRepository:
     def _list_support_messages_sync(self, ticket_id: int) -> list[SupportMessage]:
         with closing(self._connect()) as connection:
             return SupportRepository(connection).list_support_messages(ticket_id)
+
+    def _create_catalog_sync_audit_sync(
+        self,
+        admin_telegram_id: int,
+        created_count: int,
+        updated_count: int,
+        hidden_count: int,
+        error_count: int,
+        status: str,
+    ) -> CatalogSyncAudit:
+        with closing(self._connect()) as connection:
+            audit = CatalogSyncAuditRepository(connection).create(
+                admin_telegram_id=admin_telegram_id,
+                created_count=created_count,
+                updated_count=updated_count,
+                hidden_count=hidden_count,
+                error_count=error_count,
+                status=status,
+            )
+            connection.commit()
+
+        return audit
+
+    def _latest_catalog_sync_audits_sync(self, limit: int) -> list[CatalogSyncAudit]:
+        with closing(self._connect()) as connection:
+            return CatalogSyncAuditRepository(connection).latest(limit)
 
 
 ClientRepository = MarketRepository

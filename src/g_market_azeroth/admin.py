@@ -329,11 +329,20 @@ async def handle_parser_apply(
         max_products=PARSER_PREVIEW_MAX_PRODUCTS,
     )
     summary = await apply_catalog_changes(parser, database=database)
+    audit = await database.create_catalog_sync_audit(
+        admin_telegram_id=callback.from_user.id,
+        created_count=summary.created_count,
+        updated_count=summary.updated_count,
+        hidden_count=summary.hidden_count,
+        error_count=summary.error_count,
+        status=_catalog_sync_status(summary),
+    )
     LOGGER.info(
         "parser apply finished",
         extra={
             "event": "parser_apply_finished",
             "admin_id": callback.from_user.id,
+            "sync_id": audit.id,
             "created_count": summary.created_count,
             "updated_count": summary.updated_count,
             "hidden_count": summary.hidden_count,
@@ -343,7 +352,7 @@ async def handle_parser_apply(
 
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            _parser_apply_text(summary),
+            _parser_apply_text(summary, sync_id=audit.id),
             reply_markup=admin_keyboard(),
         )
     await callback.answer("Каталог обновлён." if summary.error_count == 0 else "Каталог обновлён с ошибками.")
@@ -1195,11 +1204,13 @@ def _parser_preview_text(summary: ParserPreviewSummary) -> str:
     )
 
 
-def _parser_apply_text(summary: ParserApplySummary) -> str:
+def _parser_apply_text(summary: ParserApplySummary, *, sync_id: int | None = None) -> str:
+    sync_line = f"\nSync ID: #{sync_id}" if sync_id is not None else ""
     if summary.error_count and summary.created_count == 0 and summary.updated_count == 0 and summary.hidden_count == 0:
         return (
             "Не удалось обновить каталог.\n\n"
             f"Ошибок: {summary.error_count}"
+            f"{sync_line}"
         )
 
     return (
@@ -1208,7 +1219,12 @@ def _parser_apply_text(summary: ParserApplySummary) -> str:
         f"Обновлено: {summary.updated_count}\n"
         f"Скрыто: {summary.hidden_count}\n"
         f"Ошибок: {summary.error_count}"
+        f"{sync_line}"
     )
+
+
+def _catalog_sync_status(summary: ParserApplySummary) -> str:
+    return "success" if summary.error_count == 0 else "failed"
 
 
 async def _purchase_requests_page(

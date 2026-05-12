@@ -1,4 +1,5 @@
 from g_market_azeroth.admin import (
+    _catalog_sync_status,
     _format_product,
     _parser_apply_text,
     _parser_preview_text,
@@ -126,11 +127,38 @@ def test_parser_apply_text_formats_counts() -> None:
             updated_count=12,
             hidden_count=2,
             error_count=0,
-        )
+        ),
+        sync_id=42,
     )
 
     assert "Каталог обновлён" in text
+    assert "Sync ID: #42" in text
     assert "Создано: 3" in text
     assert "Обновлено: 12" in text
     assert "Скрыто: 2" in text
     assert "Ошибок: 0" in text
+
+
+def test_catalog_sync_status_reflects_errors() -> None:
+    assert (
+        _catalog_sync_status(
+            ParserApplySummary(
+                created_count=0,
+                updated_count=0,
+                hidden_count=0,
+                error_count=0,
+            )
+        )
+        == "success"
+    )
+    assert (
+        _catalog_sync_status(
+            ParserApplySummary(
+                created_count=0,
+                updated_count=0,
+                hidden_count=0,
+                error_count=1,
+            )
+        )
+        == "failed"
+    )
