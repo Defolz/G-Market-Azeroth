@@ -129,7 +129,8 @@ async def handle_products(message: Message, settings: Settings, database: Market
     if not await _ensure_admin_message(message, settings):
         return
 
-    await message.answer(await _products_text(database), reply_markup=admin_keyboard())
+    products = await database.latest_products(limit=10)
+    await message.answer(_products_text(products), reply_markup=admin_products_keyboard(products))
 
 
 @router.message(Command("requests"))
@@ -251,7 +252,8 @@ async def handle_admin_products(
         return
 
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(await _products_text(database), reply_markup=admin_keyboard())
+        products = await database.latest_products(limit=10)
+        await callback.message.edit_text(_products_text(products), reply_markup=admin_products_keyboard(products))
     await callback.answer()
 
 
@@ -659,6 +661,38 @@ async def handle_cancel_action_callback(
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("admin:product_active:"))
+async def handle_product_active_toggle(
+    callback: CallbackQuery,
+    settings: Settings,
+    database: MarketRepository,
+) -> None:
+    if not await _ensure_admin_callback(callback, settings):
+        return
+
+    parsed = _parse_product_active_callback(callback.data)
+    if parsed is None:
+        await callback.answer("Не удалось изменить статус товара.", show_alert=True)
+        return
+
+    product_id, is_active = parsed
+    product = await database.set_product_active(product_id=product_id, is_active=is_active)
+    if product is None:
+        await callback.answer("Товар не найден.", show_alert=True)
+        return
+
+    log_admin_action(
+        callback.from_user.id,
+        "product_status_changed",
+        product_id=product.id,
+        is_active=product.is_active,
+    )
+    if isinstance(callback.message, Message):
+        products = await database.latest_products(limit=10)
+        await callback.message.edit_text(_products_text(products), reply_markup=admin_products_keyboard(products))
+    await callback.answer("Товар показан." if product.is_active else "Товар скрыт.")
+
+
 @router.callback_query(AddProduct.waiting_for_realm_type, F.data.startswith("admin:add:realm:"))
 async def handle_product_realm_type(
     callback: CallbackQuery,
@@ -970,6 +1004,21 @@ def support_ticket_actions_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def admin_products_keyboard(products: list[Product]) -> InlineKeyboardMarkup:
+    rows = []
+    for product in products:
+        if product.is_active:
+            rows.append(
+                [InlineKeyboardButton(text=f"Скрыть #{product.id}", callback_data=f"admin:product_active:{product.id}:0")]
+            )
+        else:
+            rows.append(
+                [InlineKeyboardButton(text=f"Показать #{product.id}", callback_data=f"admin:product_active:{product.id}:1")]
+            )
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="admin:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def _stats_text(database: MarketRepository) -> str:
     clients_count = await database.count_clients()
     products_count = await database.count_products()
@@ -1006,13 +1055,12 @@ async def _clients_text(database: MarketRepository) -> str:
     return "\n".join(lines)
 
 
-async def _products_text(database: MarketRepository) -> str:
-    latest_products = await database.list_catalog_products(limit=10)
-    if not latest_products:
+def _products_text(products: list[Product]) -> str:
+    if not products:
         return "Товары\n\nВ базе пока нет товаров. Нажмите `Добавить товар`."
 
     lines = ["Товары", "", "Последние 10:"]
-    for product in latest_products:
+    for product in products:
         lines.append("")
         lines.append(_format_product(product))
 
@@ -1146,11 +1194,13 @@ def _format_client(index: int, client: Client) -> str:
 
 
 def _format_product(product: Product) -> str:
+    status = "активен" if product.is_active else "скрыт"
     return (
         f"#{product.id} {realm_type_label(product.realm_type)}\n"
         f"Сервер: {product.server}\n"
         f"Сторона: {product.side}\n"
-        f"Цена: {product.price}"
+        f"Цена: {product.price}\n"
+        f"Статус: {status}"
     )
 
 
@@ -1252,6 +1302,25 @@ def _parse_callback_int(data: str | None, prefix: str) -> int | None:
         return int(parts[2])
     except ValueError:
         return None
+
+
+def _parse_product_active_callback(data: str | None) -> tuple[int, bool] | None:
+    if not data:
+        return None
+
+    parts = data.split(":")
+    if len(parts) != 4 or ":".join(parts[:2]) != "admin:product_active":
+        return None
+
+    try:
+        product_id = int(parts[2])
+    except ValueError:
+        return None
+
+    if parts[3] not in {"0", "1"}:
+        return None
+
+    return product_id, parts[3] == "1"
 
 
 def _parse_page_filter_callback(data: str | None, prefix: str) -> tuple[int, str | None]:

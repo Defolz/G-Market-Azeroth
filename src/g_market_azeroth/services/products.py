@@ -33,6 +33,9 @@ class ProductService:
 
         return self._products.get_product(product_id)
 
+    def list_admin_products(self, *, limit: int) -> list[Product]:
+        return self._products.latest_products(_positive_limit(limit), include_inactive=True)
+
     def change_product_price(self, *, product_id: int, price: str) -> Product | None:
         if product_id <= 0:
             return None
@@ -41,6 +44,12 @@ class ProductService:
             product_id=product_id,
             price=_required_text(price, "price"),
         )
+
+    def set_product_active(self, *, product_id: int, is_active: bool) -> Product | None:
+        if product_id <= 0:
+            return None
+
+        return self._products.set_active(product_id=product_id, is_active=is_active)
 
     def create_catalog_product(
         self,

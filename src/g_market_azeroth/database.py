@@ -88,7 +88,7 @@ class MarketRepository:
         return await asyncio.to_thread(self._count_products_sync)
 
     async def latest_products(self, limit: int = 10) -> list[Product]:
-        return await self.list_catalog_products(limit=limit)
+        return await asyncio.to_thread(self._latest_products_sync, limit)
 
     async def list_servers(self, realm_type: str) -> list[str]:
         return await asyncio.to_thread(self._list_servers_sync, realm_type)
@@ -130,6 +130,9 @@ class MarketRepository:
 
     async def change_product_price(self, *, product_id: int, price: str) -> Product | None:
         return await asyncio.to_thread(self._change_product_price_sync, product_id, price)
+
+    async def set_product_active(self, *, product_id: int, is_active: bool) -> Product | None:
+        return await asyncio.to_thread(self._set_product_active_sync, product_id, is_active)
 
     async def create_purchase_request(self, *, product_id: int, telegram_id: int) -> PurchaseRequest:
         return await asyncio.to_thread(
@@ -430,6 +433,10 @@ class MarketRepository:
         with closing(self._connect()) as connection:
             return ProductsRepository(connection).count_products()
 
+    def _latest_products_sync(self, limit: int) -> list[Product]:
+        with closing(self._connect()) as connection:
+            return ProductService(ProductsRepository(connection)).list_admin_products(limit=limit)
+
     def _list_servers_sync(self, realm_type: str) -> list[str]:
         with closing(self._connect()) as connection:
             return ProductsRepository(connection).list_servers(realm_type)
@@ -462,6 +469,16 @@ class MarketRepository:
             product = ProductService(ProductsRepository(connection)).change_product_price(
                 product_id=product_id,
                 price=price,
+            )
+            connection.commit()
+
+        return product
+
+    def _set_product_active_sync(self, product_id: int, is_active: bool) -> Product | None:
+        with closing(self._connect()) as connection:
+            product = ProductService(ProductsRepository(connection)).set_product_active(
+                product_id=product_id,
+                is_active=is_active,
             )
             connection.commit()
 
