@@ -4,6 +4,7 @@ from g_market_azeroth.config import Settings
 from g_market_azeroth.handlers import (
     _is_valid_character_nickname,
     _normalize_character_nickname,
+    _parse_gold_amount,
     main_menu_keyboard,
 )
 
@@ -63,3 +64,26 @@ def test_character_nickname_validation_accepts_boundaries() -> None:
 
 def test_character_nickname_validation_rejects_long_values() -> None:
     assert not _is_valid_character_nickname("A" * 33)
+
+
+def test_gold_amount_parser_accepts_plain_numbers() -> None:
+    assert _parse_gold_amount("10000") == 10000
+
+
+def test_gold_amount_parser_accepts_spaces() -> None:
+    assert _parse_gold_amount("10 000") == 10000
+
+
+def test_gold_amount_parser_accepts_k_suffix() -> None:
+    assert _parse_gold_amount("10k") == 10000
+    assert _parse_gold_amount("15K") == 15000
+
+
+def test_gold_amount_parser_rejects_invalid_values() -> None:
+    assert _parse_gold_amount("abc") is None
+    assert _parse_gold_amount("-5") is None
+    assert _parse_gold_amount("0") is None
+
+
+def test_gold_amount_parser_rejects_too_large_values() -> None:
+    assert _parse_gold_amount("10000001") is None

@@ -29,6 +29,7 @@ from g_market_azeroth.logging import log_metric, log_user_action
 from g_market_azeroth.services.statuses import format_request_status
 
 router = Router(name="client")
+MAX_BUY_GOLD_AMOUNT = 10_000_000
 
 
 WELCOME_TEXT = (
@@ -44,6 +45,7 @@ WELCOME_TEXT = (
 
 class BuyRequestFlow(StatesGroup):
     waiting_for_character_nickname = State()
+    waiting_for_gold_amount = State()
 
 
 class SellRequestFlow(StatesGroup):
@@ -231,7 +233,6 @@ async def handle_side(callback: CallbackQuery, database: MarketRepository, state
 @router.message(BuyRequestFlow.waiting_for_character_nickname)
 async def handle_buy_character_nickname(
     message: Message,
-    database: MarketRepository,
     state: FSMContext,
 ) -> None:
     nickname = _normalize_character_nickname(message.text)
@@ -242,13 +243,37 @@ async def handle_buy_character_nickname(
         )
         return
 
+    await state.update_data(buy_character_nickname=nickname)
+    await state.set_state(BuyRequestFlow.waiting_for_gold_amount)
+
+    await message.answer(
+        "Введите количество золота:",
+        reply_markup=client_cancel_keyboard(),
+    )
+
+
+@router.message(BuyRequestFlow.waiting_for_gold_amount)
+async def handle_buy_gold_amount(
+    message: Message,
+    database: MarketRepository,
+    state: FSMContext,
+) -> None:
+    gold_amount = _parse_gold_amount(message.text)
+    if gold_amount is None:
+        await message.answer(
+            "Введите количество золота числом больше 0. Можно так: 10000, 10 000 или 10k.",
+            reply_markup=client_cancel_keyboard(),
+        )
+        return
+
     data = await state.get_data()
     realm_type = str(data["buy_realm_type"])
     server = str(data["buy_server"])
     side = str(data["buy_side"])
     server_index = int(data["buy_server_index"])
+    nickname = str(data["buy_character_nickname"])
 
-    await state.update_data(buy_character_nickname=nickname)
+    await state.update_data(buy_gold_amount=gold_amount)
     products = await database.list_catalog_products(
         realm_type=realm_type,
         server=server,
@@ -256,7 +281,14 @@ async def handle_buy_character_nickname(
     )
 
     await message.answer(
-        _products_text(realm_type, server, side, products, character_nickname=nickname),
+        _products_text(
+            realm_type,
+            server,
+            side,
+            products,
+            character_nickname=nickname,
+            gold_amount=gold_amount,
+        ),
         reply_markup=products_keyboard(products, realm_type, server_index),
     )
 
@@ -273,6 +305,10 @@ async def handle_purchase(
     character_nickname = str(data.get("buy_character_nickname") or "")
     if not _is_valid_character_nickname(character_nickname):
         await callback.answer("Введите ник персонажа перед созданием заявки.", show_alert=True)
+        return
+    gold_amount = data.get("buy_gold_amount")
+    if not isinstance(gold_amount, int) or not _is_valid_gold_amount(gold_amount):
+        await callback.answer("Введите количество золота перед созданием заявки.", show_alert=True)
         return
 
     product_id = _parse_product_id(callback.data)
@@ -308,6 +344,7 @@ async def handle_purchase(
         product,
         callback.from_user,
         character_nickname=character_nickname,
+        gold_amount=gold_amount,
     )
     await state.clear()
 
@@ -617,6 +654,7 @@ async def _notify_admins_about_purchase(
     user: User,
     *,
     character_nickname: str,
+    gold_amount: int,
 ) -> None:
     username = _username(user.username)
     full_name = _user_full_name(user)
@@ -625,7 +663,8 @@ async def _notify_admins_about_purchase(
         f"Клиент: {full_name}\n"
         f"Username: {username}\n"
         f"Telegram ID: {user.id}\n"
-        f"Ник персонажа: {character_nickname}\n\n"
+        f"Ник персонажа: {character_nickname}\n"
+        f"Количество золота: {gold_amount}\n\n"
         f"{_format_product(product)}"
     )
     await _send_to_admins(bot, settings, text, admin_purchase_keyboard(request.id))
@@ -756,14 +795,17 @@ def _products_text(
     products: list[Product],
     *,
     character_nickname: str | None = None,
+    gold_amount: int | None = None,
 ) -> str:
     nickname_lines = [f"Ник персонажа: {character_nickname}"] if character_nickname else []
+    amount_lines = [f"Количество золота: {gold_amount}"] if gold_amount is not None else []
     if not products:
         lines = [
             realm_type_label(realm_type),
             f"Сервер: {server}",
             f"Сторона: {side}",
             *nickname_lines,
+            *amount_lines,
             "",
             "Пока нет товаров.",
         ]
@@ -774,6 +816,7 @@ def _products_text(
         f"Сервер: {server}",
         f"Сторона: {side}",
         *nickname_lines,
+        *amount_lines,
         "",
         "Доступные предложения:",
     ]
@@ -868,6 +911,27 @@ def _normalize_character_nickname(value: str | None) -> str:
 
 def _is_valid_character_nickname(value: str) -> bool:
     return 2 <= len(value) <= 32
+
+
+def _parse_gold_amount(value: str | None) -> int | None:
+    normalized = "".join(_clean_text(value).split())
+    if not normalized:
+        return None
+
+    multiplier = 1
+    if normalized.lower().endswith("k"):
+        multiplier = 1000
+        normalized = normalized[:-1]
+
+    if not normalized.isdigit():
+        return None
+
+    amount = int(normalized) * multiplier
+    return amount if _is_valid_gold_amount(amount) else None
+
+
+def _is_valid_gold_amount(value: int) -> bool:
+    return 0 < value <= MAX_BUY_GOLD_AMOUNT
 
 
 def _username(username: str | None) -> str:
