@@ -9,10 +9,16 @@ from g_market_azeroth.handlers import (
     _format_number,
     _is_valid_character_nickname,
     _normalize_character_nickname,
+    _product_card_text,
     _parse_price_per_1000,
     _parse_gold_amount,
+    _side_button_text,
+    _sorted_products,
+    _sorted_servers,
+    _sorted_sides,
     main_menu_keyboard,
 )
+from g_market_azeroth.repositories.products import Product
 
 
 def make_settings(*, admin_ids: set[int]) -> Settings:
@@ -112,3 +118,40 @@ def test_total_price_calculation_uses_price_per_1000() -> None:
 def test_number_and_money_formatting_are_readable() -> None:
     assert _format_number(10000) == "10 000"
     assert _format_money(Decimal("1200")) == "1 200 ₽"
+
+
+def make_product(*, product_id: int, server: str, side: str, price: str) -> Product:
+    return Product(
+        id=product_id,
+        game_type="off",
+        server=server,
+        faction=side,
+        price=price,
+        is_active=True,
+        created_at="2026-01-01",
+        updated_at="2026-01-01",
+    )
+
+
+def test_servers_are_sorted_readably() -> None:
+    assert _sorted_servers(["Soulseeker", "Nek'Rosh"]) == ["Nek'Rosh", "Soulseeker"]
+
+
+def test_sides_are_sorted_readably() -> None:
+    assert _sorted_sides(["Horde", "Alliance"]) == ["Alliance", "Horde"]
+    assert _side_button_text("Alliance") == "⚔️ Alliance"
+
+
+def test_products_are_sorted_by_price_then_name() -> None:
+    products = [
+        make_product(product_id=1, server="Soulseeker", side="Alliance", price="120 ₽"),
+        make_product(product_id=2, server="Nek'Rosh", side="Horde", price="110 ₽"),
+    ]
+
+    assert [product.id for product in _sorted_products(products)] == [2, 1]
+
+
+def test_product_card_text_is_compact_and_readable() -> None:
+    product = make_product(product_id=1, server="Soulseeker", side="Alliance", price="120 ₽")
+
+    assert _product_card_text(product) == "🟡 Soulseeker\n⚔️ Alliance\n💰 120 ₽ / 1000 gold"

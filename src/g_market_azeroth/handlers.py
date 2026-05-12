@@ -162,7 +162,7 @@ async def handle_realm_type(callback: CallbackQuery, database: MarketRepository)
         await callback.answer("Неизвестный тип.", show_alert=True)
         return
 
-    servers = await database.list_servers(realm_type)
+    servers = _sorted_servers(await database.list_servers(realm_type))
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             _servers_text(realm_type, servers),
@@ -179,13 +179,13 @@ async def handle_server(callback: CallbackQuery, database: MarketRepository) -> 
         return
 
     realm_type, server_index = parsed
-    servers = await database.list_servers(realm_type)
+    servers = _sorted_servers(await database.list_servers(realm_type))
     if server_index >= len(servers):
         await callback.answer("Сервер больше не доступен.", show_alert=True)
         return
 
     server = servers[server_index]
-    sides = await database.list_sides(realm_type, server)
+    sides = _sorted_sides(await database.list_sides(realm_type, server))
 
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
@@ -203,13 +203,13 @@ async def handle_side(callback: CallbackQuery, database: MarketRepository, state
         return
 
     realm_type, server_index, side_index = parsed
-    servers = await database.list_servers(realm_type)
+    servers = _sorted_servers(await database.list_servers(realm_type))
     if server_index >= len(servers):
         await callback.answer("Сервер больше не доступен.", show_alert=True)
         return
 
     server = servers[server_index]
-    sides = await database.list_sides(realm_type, server)
+    sides = _sorted_sides(await database.list_sides(realm_type, server))
     if side_index >= len(sides):
         await callback.answer("Сторона больше не доступна.", show_alert=True)
         return
@@ -276,10 +276,12 @@ async def handle_buy_gold_amount(
     nickname = str(data["buy_character_nickname"])
 
     await state.update_data(buy_gold_amount=gold_amount)
-    products = await database.list_catalog_products(
-        realm_type=realm_type,
-        server=server,
-        side=side,
+    products = _sorted_products(
+        await database.list_catalog_products(
+            realm_type=realm_type,
+            server=server,
+            side=side,
+        )
     )
 
     await message.answer(
@@ -638,8 +640,8 @@ def sell_realm_type_keyboard() -> InlineKeyboardMarkup:
 
 def servers_keyboard(realm_type: str, servers: list[str]) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=server, callback_data=f"shop:server:{realm_type}:{index}")]
-        for index, server in enumerate(servers)
+        [InlineKeyboardButton(text=_server_button_text(server), callback_data=f"shop:server:{realm_type}:{index}")]
+        for index, server in enumerate(_sorted_servers(servers))
     ]
     rows.append([InlineKeyboardButton(text="Назад", callback_data="shop:buy")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -647,8 +649,8 @@ def servers_keyboard(realm_type: str, servers: list[str]) -> InlineKeyboardMarku
 
 def sides_keyboard(realm_type: str, server_index: int, sides: list[str]) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=side, callback_data=f"shop:side:{realm_type}:{server_index}:{index}")]
-        for index, side in enumerate(sides)
+        [InlineKeyboardButton(text=_side_button_text(side), callback_data=f"shop:side:{realm_type}:{server_index}:{index}")]
+        for index, side in enumerate(_sorted_sides(sides))
     ]
     rows.append([InlineKeyboardButton(text="Назад", callback_data=f"shop:realm:{realm_type}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -658,11 +660,11 @@ def products_keyboard(products: list[Product], realm_type: str, server_index: in
     rows = [
         [
             InlineKeyboardButton(
-                text=f"Купить #{product.id} - {product.price}",
+                text=f"Выбрать #{product.id} · {_product_price_label(product)}",
                 callback_data=f"shop:purchase:{product.id}",
             )
         ]
-        for product in products
+        for product in _sorted_products(products)
     ]
     rows.append([InlineKeyboardButton(text="Назад", callback_data=f"shop:server:{realm_type}:{server_index}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -877,7 +879,7 @@ def _products_text(
     gold_amount: int | None = None,
 ) -> str:
     nickname_lines = [f"Ник персонажа: {character_nickname}"] if character_nickname else []
-    amount_lines = [f"Количество золота: {gold_amount}"] if gold_amount is not None else []
+    amount_lines = [f"Количество золота: {_format_number(gold_amount)}"] if gold_amount is not None else []
     if not products:
         lines = [
             realm_type_label(realm_type),
@@ -899,9 +901,9 @@ def _products_text(
         "",
         "Доступные предложения:",
     ]
-    for product in products:
+    for product in _sorted_products(products):
         lines.append("")
-        lines.append(f"#{product.id}\nЦена: {product.price}")
+        lines.append(_product_card_text(product))
 
     return "\n".join(lines)
 
@@ -924,6 +926,22 @@ def _purchase_confirmation_text(
         f"Итого: {_format_money(total_price)}\n\n"
         "Создать заявку?"
     )
+
+
+def _product_card_text(product: Product) -> str:
+    return (
+        f"🟡 {product.server}\n"
+        f"⚔️ {product.side}\n"
+        f"💰 {_product_price_label(product)}"
+    )
+
+
+def _product_price_label(product: Product) -> str:
+    price = _parse_price_per_1000(product.price)
+    if price is None:
+        return f"{product.price} / 1000 gold"
+
+    return f"{_format_money(price)} / 1000 gold"
 
 
 def _format_product(product: Product) -> str:
@@ -1061,6 +1079,53 @@ def _format_money(value: Decimal) -> str:
     else:
         amount = f"{value.quantize(Decimal('0.01')):,.2f}".replace(",", " ")
     return f"{amount} ₽"
+
+
+def _sorted_servers(servers: list[str]) -> list[str]:
+    return sorted(servers, key=_readable_sort_key)
+
+
+def _sorted_sides(sides: list[str]) -> list[str]:
+    return sorted(sides, key=_side_sort_key)
+
+
+def _sorted_products(products: list[Product]) -> list[Product]:
+    return sorted(
+        products,
+        key=lambda product: (
+            _price_sort_key(product.price),
+            product.server.casefold(),
+            product.side.casefold(),
+            product.id,
+        ),
+    )
+
+
+def _server_button_text(server: str) -> str:
+    return f"🟡 {server}"
+
+
+def _side_button_text(side: str) -> str:
+    return f"⚔️ {side}"
+
+
+def _readable_sort_key(value: str) -> str:
+    return value.casefold().strip()
+
+
+def _side_sort_key(side: str) -> tuple[int, str]:
+    normalized = side.casefold().strip()
+    order = {
+        "alliance": 0,
+        "альянс": 0,
+        "horde": 1,
+        "орда": 1,
+    }
+    return order.get(normalized, 10), normalized
+
+
+def _price_sort_key(price: str) -> Decimal:
+    return _parse_price_per_1000(price) or Decimal("999999999")
 
 
 def _username(username: str | None) -> str:
