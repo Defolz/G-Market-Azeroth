@@ -689,7 +689,10 @@ async def handle_product_active_toggle(
     )
     if isinstance(callback.message, Message):
         products = await database.latest_products(limit=10)
-        await callback.message.edit_text(_products_text(products), reply_markup=admin_products_keyboard(products))
+        await callback.message.edit_text(
+            _products_text(products, notice=_product_visibility_notice(product)),
+            reply_markup=admin_products_keyboard(products),
+        )
     await callback.answer("Товар показан." if product.is_active else "Товар скрыт.")
 
 
@@ -1009,11 +1012,21 @@ def admin_products_keyboard(products: list[Product]) -> InlineKeyboardMarkup:
     for product in products:
         if product.is_active:
             rows.append(
-                [InlineKeyboardButton(text=f"Скрыть #{product.id}", callback_data=f"admin:product_active:{product.id}:0")]
+                [
+                    InlineKeyboardButton(
+                        text=f"Скрыть #{product.id}",
+                        callback_data=f"admin:product_active:{product.id}:0",
+                    )
+                ]
             )
         else:
             rows.append(
-                [InlineKeyboardButton(text=f"Показать #{product.id}", callback_data=f"admin:product_active:{product.id}:1")]
+                [
+                    InlineKeyboardButton(
+                        text=f"Показать #{product.id}",
+                        callback_data=f"admin:product_active:{product.id}:1",
+                    )
+                ]
             )
     rows.append([InlineKeyboardButton(text="Назад", callback_data="admin:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1055,11 +1068,14 @@ async def _clients_text(database: MarketRepository) -> str:
     return "\n".join(lines)
 
 
-def _products_text(products: list[Product]) -> str:
+def _products_text(products: list[Product], *, notice: str | None = None) -> str:
     if not products:
         return "Товары\n\nВ базе пока нет товаров. Нажмите `Добавить товар`."
 
     lines = ["Товары", "", "Последние 10:"]
+    if notice:
+        lines.extend(["", notice])
+
     for product in products:
         lines.append("")
         lines.append(_format_product(product))
@@ -1202,6 +1218,11 @@ def _format_product(product: Product) -> str:
         f"Цена: {product.price}\n"
         f"Статус: {status}"
     )
+
+
+def _product_visibility_notice(product: Product) -> str:
+    status = "показан в каталоге" if product.is_active else "скрыт из каталога"
+    return f"Готово: товар #{product.id} {status}."
 
 
 def _format_purchase_request(request: PurchaseRequestDetails) -> str:
