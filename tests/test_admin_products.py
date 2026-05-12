@@ -1,13 +1,15 @@
 from g_market_azeroth.admin import (
     _format_product,
+    _parser_apply_text,
     _parser_preview_text,
     _product_visibility_notice,
     _products_text,
     admin_keyboard,
     admin_products_keyboard,
+    parser_preview_keyboard,
 )
 from g_market_azeroth.repositories.products import Product
-from g_market_azeroth.services.parsers import ParserPreviewSummary
+from g_market_azeroth.services.parsers import ParserApplySummary, ParserPreviewSummary
 
 
 def make_product(*, product_id: int, is_active: bool) -> Product:
@@ -84,4 +86,51 @@ def test_parser_preview_text_formats_counts() -> None:
     assert "Новых: 3" in text
     assert "Обновятся: 12" in text
     assert "Скрытых: 2" in text
+    assert "Ошибок: 0" in text
+
+
+def test_parser_preview_keyboard_allows_apply_when_changes_are_clean() -> None:
+    keyboard = parser_preview_keyboard(
+        ParserPreviewSummary(
+            fetched_count=24,
+            new_count=3,
+            update_count=0,
+            hidden_count=0,
+            error_count=0,
+        )
+    )
+    button = keyboard.inline_keyboard[0][0]
+
+    assert button.text == "✅ Применить каталог"
+    assert button.callback_data == "admin:parser_apply"
+
+
+def test_parser_preview_keyboard_hides_apply_when_errors_exist() -> None:
+    keyboard = parser_preview_keyboard(
+        ParserPreviewSummary(
+            fetched_count=0,
+            new_count=0,
+            update_count=0,
+            hidden_count=0,
+            error_count=1,
+        )
+    )
+
+    assert all(button.callback_data != "admin:parser_apply" for row in keyboard.inline_keyboard for button in row)
+
+
+def test_parser_apply_text_formats_counts() -> None:
+    text = _parser_apply_text(
+        ParserApplySummary(
+            created_count=3,
+            updated_count=12,
+            hidden_count=2,
+            error_count=0,
+        )
+    )
+
+    assert "Каталог обновлён" in text
+    assert "Создано: 3" in text
+    assert "Обновлено: 12" in text
+    assert "Скрыто: 2" in text
     assert "Ошибок: 0" in text

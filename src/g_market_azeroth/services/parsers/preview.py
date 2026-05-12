@@ -49,9 +49,9 @@ def _build_preview_summary(
     error_count: int,
 ) -> ParserPreviewSummary:
     current_by_key = {_product_key(product): product for product in current_products}
+    parsed_keys = {_parsed_product_key(product) for product in parsed_products}
     new_count = 0
     update_count = 0
-    hidden_count = 0
 
     for parsed_product in parsed_products:
         current_product = current_by_key.get(_parsed_product_key(parsed_product))
@@ -60,12 +60,17 @@ def _build_preview_summary(
             continue
 
         if not current_product.is_active:
-            hidden_count += 1
             continue
 
         current_price = _parse_product_price(current_product.price)
         if current_price is None or current_price != parsed_product.price_per_1000:
             update_count += 1
+
+    hidden_count = sum(
+        1
+        for product in current_products
+        if product.is_active and _product_key(product) not in parsed_keys
+    )
 
     return ParserPreviewSummary(
         fetched_count=len(parsed_products),

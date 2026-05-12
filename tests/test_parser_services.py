@@ -7,9 +7,11 @@ from g_market_azeroth.services.parsers import (
     FunPayCatalogParser,
     ParsedProduct,
     ParserError,
+    apply_catalog_changes,
     fetch_products_safely,
     preview_catalog_changes,
 )
+from g_market_azeroth.database import MarketRepository
 from g_market_azeroth.repositories.products import Product
 
 
@@ -168,5 +170,131 @@ def test_parser_preview_counts_new_updates_and_hidden_products() -> None:
     assert summary.fetched_count == 3
     assert summary.new_count == 1
     assert summary.update_count == 1
+    assert summary.hidden_count == 0
+    assert summary.error_count == 0
+
+
+def parsed_product(
+    *,
+    realm_type: str = "off",
+    server: str = "Soulseeker",
+    faction: str = "Alliance",
+    price: Decimal = Decimal("120"),
+) -> ParsedProduct:
+    return ParsedProduct(
+        realm_type=realm_type,
+        server=server,
+        faction=faction,
+        price_per_1000=price,
+        external_id=f"{realm_type}:{server}:{faction}",
+        title=f"{server} / {faction}",
+    )
+
+
+def test_parser_preview_counts_missing_active_products_as_hidden() -> None:
+    class PreviewParser:
+        async def fetch_products(self) -> list[ParsedProduct]:
+            return []
+
+    summary = asyncio.run(
+        preview_catalog_changes(
+            PreviewParser(),
+            current_products=[make_product(product_id=1, price="120 ₽")],
+        )
+    )
+
+    assert summary.hidden_count == 1
+
+
+def test_parser_apply_creates_updates_and_hides_products(tmp_path) -> None:
+    class ApplyParser:
+        async def fetch_products(self) -> list[ParsedProduct]:
+            return [
+                parsed_product(price=Decimal("125")),
+                parsed_product(realm_type="pirate", server="Sirus", faction="Horde", price=Decimal("90")),
+            ]
+
+    database = MarketRepository(tmp_path / "market.sqlite3")
+    asyncio.run(database.init())
+    active_product = asyncio.run(
+        database.create_catalog_product(
+            realm_type="off",
+            server="Soulseeker",
+            side="Alliance",
+            price="120",
+        )
+    )
+    missing_product = asyncio.run(
+        database.create_catalog_product(
+            realm_type="off",
+            server="Nek'Rosh",
+            side="Alliance",
+            price="100",
+        )
+    )
+
+    summary = asyncio.run(apply_catalog_changes(ApplyParser(), database=database))
+    products = asyncio.run(database.latest_products(limit=10))
+    products_by_id = {product.id: product for product in products}
+    created = [product for product in products if product.id not in {active_product.id, missing_product.id}]
+
+    assert summary.created_count == 1
+    assert summary.updated_count == 1
     assert summary.hidden_count == 1
     assert summary.error_count == 0
+    assert products_by_id[active_product.id].price == "125"
+    assert products_by_id[missing_product.id].is_active is False
+    assert len(created) == 1
+
+
+def test_parser_apply_does_not_reactivate_or_duplicate_hidden_products(tmp_path) -> None:
+    class ApplyParser:
+        async def fetch_products(self) -> list[ParsedProduct]:
+            return [parsed_product(price=Decimal("125"))]
+
+    database = MarketRepository(tmp_path / "market.sqlite3")
+    asyncio.run(database.init())
+    hidden_product = asyncio.run(
+        database.create_catalog_product(
+            realm_type="off",
+            server="Soulseeker",
+            side="Alliance",
+            price="120",
+        )
+    )
+    asyncio.run(database.set_product_active(product_id=hidden_product.id, is_active=False))
+
+    summary = asyncio.run(apply_catalog_changes(ApplyParser(), database=database))
+    products = asyncio.run(database.latest_products(limit=10))
+
+    assert summary.created_count == 0
+    assert summary.updated_count == 0
+    assert summary.hidden_count == 0
+    assert len(products) == 1
+    assert products[0].is_active is False
+    assert products[0].price == "120"
+
+
+def test_parser_apply_does_not_hide_everything_on_parser_failure(tmp_path) -> None:
+    class BrokenParser:
+        async def fetch_products(self) -> list[ParsedProduct]:
+            raise ParserError("source unavailable")
+
+    database = MarketRepository(tmp_path / "market.sqlite3")
+    asyncio.run(database.init())
+    product = asyncio.run(
+        database.create_catalog_product(
+            realm_type="off",
+            server="Soulseeker",
+            side="Alliance",
+            price="120",
+        )
+    )
+
+    summary = asyncio.run(apply_catalog_changes(BrokenParser(), database=database))
+    products = asyncio.run(database.latest_products(limit=10))
+
+    assert summary.error_count == 1
+    assert summary.hidden_count == 0
+    assert products[0].id == product.id
+    assert products[0].is_active is True

@@ -30,7 +30,13 @@ from g_market_azeroth.database import (
     SupportTicket,
 )
 from g_market_azeroth.logging import log_admin_action
-from g_market_azeroth.services.parsers import FunPayCatalogParser, ParserPreviewSummary, preview_catalog_changes
+from g_market_azeroth.services.parsers import (
+    FunPayCatalogParser,
+    ParserApplySummary,
+    ParserPreviewSummary,
+    apply_catalog_changes,
+    preview_catalog_changes,
+)
 from g_market_azeroth.services.statuses import format_request_status
 
 router = Router(name="admin")
@@ -85,9 +91,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Поддержка", callback_data="admin:support"),
                 InlineKeyboardButton(text="Изменить цену", callback_data="admin:change_price"),
             ],
-            [
-                InlineKeyboardButton(text="Обновить каталог", callback_data="admin:parser_preview"),
-            ],
+            [InlineKeyboardButton(text="Обновить каталог", callback_data="admin:parser_preview")],
         ]
     )
 
@@ -302,9 +306,47 @@ async def handle_parser_preview(
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             _parser_preview_text(summary),
-            reply_markup=admin_keyboard(),
+            reply_markup=parser_preview_keyboard(summary),
         )
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin:parser_apply")
+async def handle_parser_apply(
+    callback: CallbackQuery,
+    settings: Settings,
+    database: MarketRepository,
+) -> None:
+    if not await _ensure_admin_callback(callback, settings):
+        return
+
+    LOGGER.info(
+        "parser apply started",
+        extra={"event": "parser_apply_started", "admin_id": callback.from_user.id},
+    )
+    parser = FunPayCatalogParser(
+        source_db=PARSER_PREVIEW_SOURCE_DB_PATH,
+        max_products=PARSER_PREVIEW_MAX_PRODUCTS,
+    )
+    summary = await apply_catalog_changes(parser, database=database)
+    LOGGER.info(
+        "parser apply finished",
+        extra={
+            "event": "parser_apply_finished",
+            "admin_id": callback.from_user.id,
+            "created_count": summary.created_count,
+            "updated_count": summary.updated_count,
+            "hidden_count": summary.hidden_count,
+            "failures": summary.error_count,
+        },
+    )
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _parser_apply_text(summary),
+            reply_markup=admin_keyboard(),
+        )
+    await callback.answer("Каталог обновлён." if summary.error_count == 0 else "Каталог обновлён с ошибками.")
 
 
 @router.callback_query(F.data == "admin:requests")
@@ -1082,6 +1124,15 @@ def admin_products_keyboard(products: list[Product]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def parser_preview_keyboard(summary: ParserPreviewSummary) -> InlineKeyboardMarkup:
+    rows = []
+    has_changes = summary.new_count > 0 or summary.update_count > 0 or summary.hidden_count > 0
+    if has_changes and summary.error_count == 0:
+        rows.append([InlineKeyboardButton(text="✅ Применить каталог", callback_data="admin:parser_apply")])
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="admin:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def _stats_text(database: MarketRepository) -> str:
     clients_count = await database.count_clients()
     products_count = await database.count_products()
@@ -1140,6 +1191,22 @@ def _parser_preview_text(summary: ParserPreviewSummary) -> str:
         f"Новых: {summary.new_count}\n"
         f"Обновятся: {summary.update_count}\n"
         f"Скрытых: {summary.hidden_count}\n"
+        f"Ошибок: {summary.error_count}"
+    )
+
+
+def _parser_apply_text(summary: ParserApplySummary) -> str:
+    if summary.error_count and summary.created_count == 0 and summary.updated_count == 0 and summary.hidden_count == 0:
+        return (
+            "Не удалось обновить каталог.\n\n"
+            f"Ошибок: {summary.error_count}"
+        )
+
+    return (
+        "Каталог обновлён\n\n"
+        f"Создано: {summary.created_count}\n"
+        f"Обновлено: {summary.updated_count}\n"
+        f"Скрыто: {summary.hidden_count}\n"
         f"Ошибок: {summary.error_count}"
     )
 
