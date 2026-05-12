@@ -1,12 +1,14 @@
 from g_market_azeroth.admin import (
     _catalog_sync_status,
     _format_product,
+    _parser_apply_confirmation_text,
     _parser_apply_text,
     _parser_preview_text,
     _product_visibility_notice,
     _products_text,
     admin_keyboard,
     admin_products_keyboard,
+    parser_apply_confirmation_keyboard,
     parser_preview_keyboard,
 )
 from g_market_azeroth.repositories.products import Product
@@ -104,6 +106,11 @@ def test_parser_preview_keyboard_allows_apply_when_changes_are_clean() -> None:
 
     assert button.text == "✅ Применить каталог"
     assert button.callback_data == "admin:parser_apply"
+    assert any(
+        button.callback_data == "admin:parser_apply_cancel"
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
 
 
 def test_parser_preview_keyboard_hides_apply_when_errors_exist() -> None:
@@ -118,6 +125,27 @@ def test_parser_preview_keyboard_hides_apply_when_errors_exist() -> None:
     )
 
     assert all(button.callback_data != "admin:parser_apply" for row in keyboard.inline_keyboard for button in row)
+
+
+def test_parser_apply_confirmation_keyboard_requires_final_confirm() -> None:
+    keyboard = parser_apply_confirmation_keyboard()
+    buttons = [
+        (button.text, button.callback_data)
+        for row in keyboard.inline_keyboard
+        for button in row
+    ]
+
+    assert ("✅ Подтвердить обновление", "admin:parser_apply_confirm") in buttons
+    assert ("❌ Отмена", "admin:parser_apply_cancel") in buttons
+
+
+def test_parser_apply_confirmation_text_explains_changes() -> None:
+    text = _parser_apply_confirmation_text()
+
+    assert "Подтвердить обновление каталога?" in text
+    assert "созданы новые товары" in text
+    assert "обновлены цены" in text
+    assert "скрыты отсутствующие товары" in text
 
 
 def test_parser_apply_text_formats_counts() -> None:

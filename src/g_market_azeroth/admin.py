@@ -312,7 +312,23 @@ async def handle_parser_preview(
 
 
 @router.callback_query(F.data == "admin:parser_apply")
-async def handle_parser_apply(
+async def handle_parser_apply_request(
+    callback: CallbackQuery,
+    settings: Settings,
+) -> None:
+    if not await _ensure_admin_callback(callback, settings):
+        return
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _parser_apply_confirmation_text(),
+            reply_markup=parser_apply_confirmation_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:parser_apply_confirm")
+async def handle_parser_apply_confirm(
     callback: CallbackQuery,
     settings: Settings,
     database: MarketRepository,
@@ -356,6 +372,19 @@ async def handle_parser_apply(
             reply_markup=admin_keyboard(),
         )
     await callback.answer("Каталог обновлён." if summary.error_count == 0 else "Каталог обновлён с ошибками.")
+
+
+@router.callback_query(F.data == "admin:parser_apply_cancel")
+async def handle_parser_apply_cancel(callback: CallbackQuery, settings: Settings) -> None:
+    if not await _ensure_admin_callback(callback, settings):
+        return
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "Обновление каталога отменено.",
+            reply_markup=admin_keyboard(),
+        )
+    await callback.answer("Обновление отменено.")
 
 
 @router.callback_query(F.data == "admin:requests")
@@ -1138,8 +1167,18 @@ def parser_preview_keyboard(summary: ParserPreviewSummary) -> InlineKeyboardMark
     has_changes = summary.new_count > 0 or summary.update_count > 0 or summary.hidden_count > 0
     if has_changes and summary.error_count == 0:
         rows.append([InlineKeyboardButton(text="✅ Применить каталог", callback_data="admin:parser_apply")])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="admin:parser_apply_cancel")])
     rows.append([InlineKeyboardButton(text="Назад", callback_data="admin:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def parser_apply_confirmation_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Подтвердить обновление", callback_data="admin:parser_apply_confirm")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:parser_apply_cancel")],
+        ]
+    )
 
 
 async def _stats_text(database: MarketRepository) -> str:
@@ -1201,6 +1240,16 @@ def _parser_preview_text(summary: ParserPreviewSummary) -> str:
         f"Обновятся: {summary.update_count}\n"
         f"Скрытых: {summary.hidden_count}\n"
         f"Ошибок: {summary.error_count}"
+    )
+
+
+def _parser_apply_confirmation_text() -> str:
+    return (
+        "Подтвердить обновление каталога?\n\n"
+        "Будут:\n"
+        "- созданы новые товары\n"
+        "- обновлены цены\n"
+        "- скрыты отсутствующие товары"
     )
 
 
