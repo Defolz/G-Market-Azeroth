@@ -42,6 +42,10 @@ WELCOME_TEXT = (
 )
 
 
+class BuyRequestFlow(StatesGroup):
+    waiting_for_character_nickname = State()
+
+
 class SellRequestFlow(StatesGroup):
     waiting_for_realm_type = State()
     waiting_for_server = State()
@@ -188,7 +192,7 @@ async def handle_server(callback: CallbackQuery, database: MarketRepository) -> 
 
 
 @router.callback_query(F.data.startswith("shop:side:"))
-async def handle_side(callback: CallbackQuery, database: MarketRepository) -> None:
+async def handle_side(callback: CallbackQuery, database: MarketRepository, state: FSMContext) -> None:
     parsed = _parse_side_callback(callback.data)
     if not parsed:
         await callback.answer("Не удалось открыть сторону.", show_alert=True)
@@ -207,18 +211,54 @@ async def handle_side(callback: CallbackQuery, database: MarketRepository) -> No
         return
 
     side = sides[side_index]
+    await state.update_data(
+        buy_realm_type=realm_type,
+        buy_server_index=server_index,
+        buy_side_index=side_index,
+        buy_server=server,
+        buy_side=side,
+    )
+    await state.set_state(BuyRequestFlow.waiting_for_character_nickname)
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _character_nickname_prompt(realm_type, server, side),
+            reply_markup=client_cancel_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.message(BuyRequestFlow.waiting_for_character_nickname)
+async def handle_buy_character_nickname(
+    message: Message,
+    database: MarketRepository,
+    state: FSMContext,
+) -> None:
+    nickname = _normalize_character_nickname(message.text)
+    if not _is_valid_character_nickname(nickname):
+        await message.answer(
+            "Введите ник персонажа от 2 до 32 символов.",
+            reply_markup=client_cancel_keyboard(),
+        )
+        return
+
+    data = await state.get_data()
+    realm_type = str(data["buy_realm_type"])
+    server = str(data["buy_server"])
+    side = str(data["buy_side"])
+    server_index = int(data["buy_server_index"])
+
+    await state.update_data(buy_character_nickname=nickname)
     products = await database.list_catalog_products(
         realm_type=realm_type,
         server=server,
         side=side,
     )
 
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            _products_text(realm_type, server, side, products),
-            reply_markup=products_keyboard(products, realm_type, server_index),
-        )
-    await callback.answer()
+    await message.answer(
+        _products_text(realm_type, server, side, products, character_nickname=nickname),
+        reply_markup=products_keyboard(products, realm_type, server_index),
+    )
 
 
 @router.callback_query(F.data.startswith("shop:purchase:"))
@@ -227,7 +267,14 @@ async def handle_purchase(
     bot: Bot,
     settings: Settings,
     database: MarketRepository,
+    state: FSMContext,
 ) -> None:
+    data = await state.get_data()
+    character_nickname = str(data.get("buy_character_nickname") or "")
+    if not _is_valid_character_nickname(character_nickname):
+        await callback.answer("Введите ник персонажа перед созданием заявки.", show_alert=True)
+        return
+
     product_id = _parse_product_id(callback.data)
     if product_id is None:
         await callback.answer("Не удалось создать заявку.", show_alert=True)
@@ -254,7 +301,15 @@ async def handle_purchase(
         request_id=request.id,
         product_id=product.id,
     )
-    await _notify_admins_about_purchase(bot, settings, request, product, callback.from_user)
+    await _notify_admins_about_purchase(
+        bot,
+        settings,
+        request,
+        product,
+        callback.from_user,
+        character_nickname=character_nickname,
+    )
+    await state.clear()
 
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
@@ -560,6 +615,8 @@ async def _notify_admins_about_purchase(
     request: PurchaseRequest,
     product: Product,
     user: User,
+    *,
+    character_nickname: str,
 ) -> None:
     username = _username(user.username)
     full_name = _user_full_name(user)
@@ -567,7 +624,8 @@ async def _notify_admins_about_purchase(
         f"Новая заявка на покупку #{request.id}\n\n"
         f"Клиент: {full_name}\n"
         f"Username: {username}\n"
-        f"Telegram ID: {user.id}\n\n"
+        f"Telegram ID: {user.id}\n"
+        f"Ник персонажа: {character_nickname}\n\n"
         f"{_format_product(product)}"
     )
     await _send_to_admins(bot, settings, text, admin_purchase_keyboard(request.id))
@@ -682,19 +740,40 @@ def _sides_text(realm_type: str, server: str, sides: list[str]) -> str:
     )
 
 
-def _products_text(realm_type: str, server: str, side: str, products: list[Product]) -> str:
+def _character_nickname_prompt(realm_type: str, server: str, side: str) -> str:
+    return (
+        f"{realm_type_label(realm_type)}\n"
+        f"Сервер: {server}\n"
+        f"Сторона: {side}\n\n"
+        "Введите ник персонажа:"
+    )
+
+
+def _products_text(
+    realm_type: str,
+    server: str,
+    side: str,
+    products: list[Product],
+    *,
+    character_nickname: str | None = None,
+) -> str:
+    nickname_lines = [f"Ник персонажа: {character_nickname}"] if character_nickname else []
     if not products:
-        return (
-            f"{realm_type_label(realm_type)}\n"
-            f"Сервер: {server}\n"
-            f"Сторона: {side}\n\n"
-            "Пока нет товаров."
-        )
+        lines = [
+            realm_type_label(realm_type),
+            f"Сервер: {server}",
+            f"Сторона: {side}",
+            *nickname_lines,
+            "",
+            "Пока нет товаров.",
+        ]
+        return "\n".join(lines)
 
     lines = [
         realm_type_label(realm_type),
         f"Сервер: {server}",
         f"Сторона: {side}",
+        *nickname_lines,
         "",
         "Доступные предложения:",
     ]
@@ -781,6 +860,14 @@ def _parse_product_id(data: str | None) -> int | None:
 
 def _clean_text(value: str | None) -> str:
     return value.strip() if value else ""
+
+
+def _normalize_character_nickname(value: str | None) -> str:
+    return _clean_text(value)
+
+
+def _is_valid_character_nickname(value: str) -> bool:
+    return 2 <= len(value) <= 32
 
 
 def _username(username: str | None) -> str:

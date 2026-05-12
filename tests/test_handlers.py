@@ -1,7 +1,11 @@
 from aiogram.types import User
 
 from g_market_azeroth.config import Settings
-from g_market_azeroth.handlers import main_menu_keyboard
+from g_market_azeroth.handlers import (
+    _is_valid_character_nickname,
+    _normalize_character_nickname,
+    main_menu_keyboard,
+)
 
 
 def make_settings(*, admin_ids: set[int]) -> Settings:
@@ -41,3 +45,21 @@ def test_main_menu_shows_admin_entry_for_admin_user() -> None:
     )
 
     assert ("⚙️ Админка", "admin:home") in buttons
+
+
+def test_character_nickname_is_trimmed() -> None:
+    assert _normalize_character_nickname("  Thrall  ") == "Thrall"
+
+
+def test_character_nickname_validation_rejects_empty_and_short_values() -> None:
+    assert not _is_valid_character_nickname("")
+    assert not _is_valid_character_nickname("A")
+
+
+def test_character_nickname_validation_accepts_boundaries() -> None:
+    assert _is_valid_character_nickname("Ab")
+    assert _is_valid_character_nickname("A" * 32)
+
+
+def test_character_nickname_validation_rejects_long_values() -> None:
+    assert not _is_valid_character_nickname("A" * 33)
