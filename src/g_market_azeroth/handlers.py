@@ -1,3 +1,5 @@
+from decimal import Decimal, InvalidOperation
+
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart
@@ -296,8 +298,6 @@ async def handle_buy_gold_amount(
 @router.callback_query(F.data.startswith("shop:purchase:"))
 async def handle_purchase(
     callback: CallbackQuery,
-    bot: Bot,
-    settings: Settings,
     database: MarketRepository,
     state: FSMContext,
 ) -> None:
@@ -320,7 +320,63 @@ async def handle_purchase(
     if product is None:
         await callback.answer("Товар больше не доступен.", show_alert=True)
         return
+    price_per_1000 = _parse_price_per_1000(product.price)
+    if price_per_1000 is None:
+        await callback.answer("Не удалось рассчитать итоговую стоимость.", show_alert=True)
+        return
 
+    total_price = _calculate_total_price(gold_amount, price_per_1000)
+    await state.update_data(
+        buy_product_id=product.id,
+        buy_price_per_1000=str(price_per_1000),
+        buy_total_price=str(total_price),
+    )
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _purchase_confirmation_text(
+                product,
+                character_nickname=character_nickname,
+                gold_amount=gold_amount,
+                price_per_1000=price_per_1000,
+                total_price=total_price,
+            ),
+            reply_markup=purchase_confirmation_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "shop:confirm_purchase")
+async def handle_purchase_confirmation(
+    callback: CallbackQuery,
+    bot: Bot,
+    settings: Settings,
+    database: MarketRepository,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    character_nickname = str(data.get("buy_character_nickname") or "")
+    gold_amount = data.get("buy_gold_amount")
+    product_id = data.get("buy_product_id")
+    if (
+        not _is_valid_character_nickname(character_nickname)
+        or not isinstance(gold_amount, int)
+        or not _is_valid_gold_amount(gold_amount)
+        or not isinstance(product_id, int)
+    ):
+        await callback.answer("Заявка устарела. Начните покупку заново.", show_alert=True)
+        return
+
+    product = await database.get_catalog_product(product_id)
+    if product is None:
+        await callback.answer("Товар больше не доступен.", show_alert=True)
+        return
+    price_per_1000 = _parse_price_per_1000(product.price)
+    if price_per_1000 is None:
+        await callback.answer("Не удалось рассчитать итоговую стоимость.", show_alert=True)
+        return
+
+    total_price = _calculate_total_price(gold_amount, price_per_1000)
     request = await database.create_purchase_request(
         product_id=product.id,
         telegram_id=callback.from_user.id,
@@ -345,6 +401,7 @@ async def handle_purchase(
         callback.from_user,
         character_nickname=character_nickname,
         gold_amount=gold_amount,
+        total_price=total_price,
     )
     await state.clear()
 
@@ -356,6 +413,17 @@ async def handle_purchase(
             reply_markup=main_menu_keyboard(settings, callback.from_user),
         )
     await callback.answer("Заявка создана.")
+
+
+@router.callback_query(F.data == "shop:cancel_purchase")
+async def handle_purchase_cancel(callback: CallbackQuery, settings: Settings, state: FSMContext) -> None:
+    await state.clear()
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "Заявка отменена.",
+            reply_markup=main_menu_keyboard(settings, callback.from_user),
+        )
+    await callback.answer("Заявка отменена.")
 
 
 @router.callback_query(SellRequestFlow.waiting_for_realm_type, F.data.startswith("sell:realm:"))
@@ -600,6 +668,15 @@ def products_keyboard(products: list[Product], realm_type: str, server_index: in
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def purchase_confirmation_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Создать заявку", callback_data="shop:confirm_purchase")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="shop:cancel_purchase")],
+        ]
+    )
+
+
 def admin_purchase_keyboard(request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -655,6 +732,7 @@ async def _notify_admins_about_purchase(
     *,
     character_nickname: str,
     gold_amount: int,
+    total_price: Decimal,
 ) -> None:
     username = _username(user.username)
     full_name = _user_full_name(user)
@@ -664,7 +742,8 @@ async def _notify_admins_about_purchase(
         f"Username: {username}\n"
         f"Telegram ID: {user.id}\n"
         f"Ник персонажа: {character_nickname}\n"
-        f"Количество золота: {gold_amount}\n\n"
+        f"Количество золота: {_format_number(gold_amount)}\n"
+        f"Итого: {_format_money(total_price)}\n\n"
         f"{_format_product(product)}"
     )
     await _send_to_admins(bot, settings, text, admin_purchase_keyboard(request.id))
@@ -827,6 +906,26 @@ def _products_text(
     return "\n".join(lines)
 
 
+def _purchase_confirmation_text(
+    product: Product,
+    *,
+    character_nickname: str,
+    gold_amount: int,
+    price_per_1000: Decimal,
+    total_price: Decimal,
+) -> str:
+    return (
+        "Проверьте заявку:\n\n"
+        f"Сервер: {product.server}\n"
+        f"Фракция: {product.side}\n"
+        f"Ник: {character_nickname}\n"
+        f"Количество: {_format_number(gold_amount)} золота\n"
+        f"Цена за 1000: {_format_money(price_per_1000)}\n"
+        f"Итого: {_format_money(total_price)}\n\n"
+        "Создать заявку?"
+    )
+
+
 def _format_product(product: Product) -> str:
     return (
         f"Товар #{product.id}\n"
@@ -932,6 +1031,36 @@ def _parse_gold_amount(value: str | None) -> int | None:
 
 def _is_valid_gold_amount(value: int) -> bool:
     return 0 < value <= MAX_BUY_GOLD_AMOUNT
+
+
+def _parse_price_per_1000(value: str) -> Decimal | None:
+    normalized = _clean_text(value).replace(" ", "").replace(",", ".")
+    normalized = "".join(character for character in normalized if character.isdigit() or character == ".")
+    if not normalized or normalized == ".":
+        return None
+
+    try:
+        price = Decimal(normalized)
+    except InvalidOperation:
+        return None
+
+    return price if price > 0 else None
+
+
+def _calculate_total_price(gold_amount: int, price_per_1000: Decimal) -> Decimal:
+    return (Decimal(gold_amount) / Decimal(1000)) * price_per_1000
+
+
+def _format_number(value: int) -> str:
+    return f"{value:,}".replace(",", " ")
+
+
+def _format_money(value: Decimal) -> str:
+    if value == value.to_integral_value():
+        amount = _format_number(int(value))
+    else:
+        amount = f"{value.quantize(Decimal('0.01')):,.2f}".replace(",", " ")
+    return f"{amount} ₽"
 
 
 def _username(username: str | None) -> str:

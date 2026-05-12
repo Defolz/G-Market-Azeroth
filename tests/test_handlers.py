@@ -1,9 +1,15 @@
+from decimal import Decimal
+
 from aiogram.types import User
 
 from g_market_azeroth.config import Settings
 from g_market_azeroth.handlers import (
+    _calculate_total_price,
+    _format_money,
+    _format_number,
     _is_valid_character_nickname,
     _normalize_character_nickname,
+    _parse_price_per_1000,
     _parse_gold_amount,
     main_menu_keyboard,
 )
@@ -87,3 +93,22 @@ def test_gold_amount_parser_rejects_invalid_values() -> None:
 
 def test_gold_amount_parser_rejects_too_large_values() -> None:
     assert _parse_gold_amount("10000001") is None
+
+
+def test_price_parser_accepts_readable_price_values() -> None:
+    assert _parse_price_per_1000("120 ₽") == Decimal("120")
+    assert _parse_price_per_1000("1 200,50 ₽") == Decimal("1200.50")
+
+
+def test_price_parser_rejects_invalid_price_values() -> None:
+    assert _parse_price_per_1000("abc") is None
+    assert _parse_price_per_1000("0") is None
+
+
+def test_total_price_calculation_uses_price_per_1000() -> None:
+    assert _calculate_total_price(10000, Decimal("120")) == Decimal("1200")
+
+
+def test_number_and_money_formatting_are_readable() -> None:
+    assert _format_number(10000) == "10 000"
+    assert _format_money(Decimal("1200")) == "1 200 ₽"
