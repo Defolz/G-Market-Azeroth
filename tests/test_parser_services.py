@@ -8,7 +8,9 @@ from g_market_azeroth.services.parsers import (
     ParsedProduct,
     ParserError,
     fetch_products_safely,
+    preview_catalog_changes,
 )
+from g_market_azeroth.repositories.products import Product
 
 
 def create_funpay_source_db(path) -> None:
@@ -69,6 +71,7 @@ def test_funpay_catalog_parser_returns_normalized_products(tmp_path) -> None:
 
     assert products == [
         ParsedProduct(
+            realm_type="off",
             server="Soulseeker",
             faction="Alliance",
             price_per_1000=Decimal("120.0"),
@@ -101,3 +104,69 @@ def test_fetch_products_safely_catches_parser_errors(caplog) -> None:
     assert result.products == []
     assert result.failed_count == 1
     assert "parser fetch failed" in caplog.text
+
+
+def make_product(*, product_id: int, price: str, is_active: bool = True) -> Product:
+    return Product(
+        id=product_id,
+        game_type="off",
+        server="Soulseeker",
+        faction="Alliance",
+        price=price,
+        is_active=is_active,
+        created_at="2026-01-01",
+        updated_at="2026-01-01",
+    )
+
+
+def test_parser_preview_counts_new_updates_and_hidden_products() -> None:
+    class PreviewParser:
+        async def fetch_products(self) -> list[ParsedProduct]:
+            return [
+                ParsedProduct(
+                    realm_type="off",
+                    server="Soulseeker",
+                    faction="Alliance",
+                    price_per_1000=Decimal("125"),
+                    external_id="existing",
+                    title="Existing",
+                ),
+                ParsedProduct(
+                    realm_type="pirate",
+                    server="Sirus",
+                    faction="Horde",
+                    price_per_1000=Decimal("90"),
+                    external_id="new",
+                    title="New",
+                ),
+                ParsedProduct(
+                    realm_type="off",
+                    server="Nek'Rosh",
+                    faction="Alliance",
+                    price_per_1000=Decimal("100"),
+                    external_id="hidden",
+                    title="Hidden",
+                ),
+            ]
+
+    current_products = [
+        make_product(product_id=1, price="120 ₽"),
+        Product(
+            id=2,
+            game_type="off",
+            server="Nek'Rosh",
+            faction="Alliance",
+            price="100 ₽",
+            is_active=False,
+            created_at="2026-01-01",
+            updated_at="2026-01-01",
+        ),
+    ]
+
+    summary = asyncio.run(preview_catalog_changes(PreviewParser(), current_products=current_products))
+
+    assert summary.fetched_count == 3
+    assert summary.new_count == 1
+    assert summary.update_count == 1
+    assert summary.hidden_count == 1
+    assert summary.error_count == 0

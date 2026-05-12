@@ -1,3 +1,6 @@
+import logging
+from pathlib import Path
+
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
@@ -27,10 +30,14 @@ from g_market_azeroth.database import (
     SupportTicket,
 )
 from g_market_azeroth.logging import log_admin_action
+from g_market_azeroth.services.parsers import FunPayCatalogParser, ParserPreviewSummary, preview_catalog_changes
 from g_market_azeroth.services.statuses import format_request_status
 
 router = Router(name="admin")
+LOGGER = logging.getLogger(__name__)
 ADMIN_REQUEST_PAGE_SIZE = 5
+PARSER_PREVIEW_SOURCE_DB_PATH = Path("data/funpay_prices.sqlite3")
+PARSER_PREVIEW_MAX_PRODUCTS = 100
 REQUEST_STATUS_FILTERS = (
     REQUEST_STATUS_NEW,
     REQUEST_STATUS_IN_PROGRESS,
@@ -77,6 +84,9 @@ def admin_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Поддержка", callback_data="admin:support"),
                 InlineKeyboardButton(text="Изменить цену", callback_data="admin:change_price"),
+            ],
+            [
+                InlineKeyboardButton(text="Обновить каталог", callback_data="admin:parser_preview"),
             ],
         ]
     )
@@ -254,6 +264,46 @@ async def handle_admin_products(
     if isinstance(callback.message, Message):
         products = await database.latest_products(limit=10)
         await callback.message.edit_text(_products_text(products), reply_markup=admin_products_keyboard(products))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:parser_preview")
+async def handle_parser_preview(
+    callback: CallbackQuery,
+    settings: Settings,
+    database: MarketRepository,
+) -> None:
+    if not await _ensure_admin_callback(callback, settings):
+        return
+
+    LOGGER.info(
+        "parser preview started",
+        extra={"event": "parser_preview_started", "admin_id": callback.from_user.id},
+    )
+    parser = FunPayCatalogParser(
+        source_db=PARSER_PREVIEW_SOURCE_DB_PATH,
+        max_products=PARSER_PREVIEW_MAX_PRODUCTS,
+    )
+    current_products = await database.latest_products(limit=1000)
+    summary = await preview_catalog_changes(parser, current_products=current_products)
+    LOGGER.info(
+        "parser preview finished",
+        extra={
+            "event": "parser_preview_finished",
+            "admin_id": callback.from_user.id,
+            "fetched_count": summary.fetched_count,
+            "new_count": summary.new_count,
+            "update_count": summary.update_count,
+            "hidden_count": summary.hidden_count,
+            "error_count": summary.error_count,
+        },
+    )
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _parser_preview_text(summary),
+            reply_markup=admin_keyboard(),
+        )
     await callback.answer()
 
 
@@ -1081,6 +1131,17 @@ def _products_text(products: list[Product], *, notice: str | None = None) -> str
         lines.append(_format_product(product))
 
     return "\n".join(lines)
+
+
+def _parser_preview_text(summary: ParserPreviewSummary) -> str:
+    return (
+        "Каталог preview:\n\n"
+        f"Найдено товаров: {summary.fetched_count}\n"
+        f"Новых: {summary.new_count}\n"
+        f"Обновятся: {summary.update_count}\n"
+        f"Скрытых: {summary.hidden_count}\n"
+        f"Ошибок: {summary.error_count}"
+    )
 
 
 async def _purchase_requests_page(

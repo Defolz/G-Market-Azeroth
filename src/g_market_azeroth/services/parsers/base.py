@@ -7,6 +7,7 @@ from typing import Protocol
 
 @dataclass(frozen=True, slots=True)
 class ParsedProduct:
+    realm_type: str
     server: str
     faction: str
     price_per_1000: Decimal

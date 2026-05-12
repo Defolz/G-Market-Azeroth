@@ -1,10 +1,13 @@
 from g_market_azeroth.admin import (
     _format_product,
+    _parser_preview_text,
     _product_visibility_notice,
     _products_text,
+    admin_keyboard,
     admin_products_keyboard,
 )
 from g_market_azeroth.repositories.products import Product
+from g_market_azeroth.services.parsers import ParserPreviewSummary
 
 
 def make_product(*, product_id: int, is_active: bool) -> Product:
@@ -54,3 +57,31 @@ def test_products_text_can_include_visibility_confirmation() -> None:
 
     assert "Готово: товар #3 скрыт из каталога." in text
     assert "Статус: скрыт" in text
+
+
+def test_admin_keyboard_has_parser_preview_action() -> None:
+    buttons = [
+        (button.text, button.callback_data)
+        for row in admin_keyboard().inline_keyboard
+        for button in row
+    ]
+
+    assert ("Обновить каталог", "admin:parser_preview") in buttons
+
+
+def test_parser_preview_text_formats_counts() -> None:
+    text = _parser_preview_text(
+        ParserPreviewSummary(
+            fetched_count=24,
+            new_count=3,
+            update_count=12,
+            hidden_count=2,
+            error_count=0,
+        )
+    )
+
+    assert "Найдено товаров: 24" in text
+    assert "Новых: 3" in text
+    assert "Обновятся: 12" in text
+    assert "Скрытых: 2" in text
+    assert "Ошибок: 0" in text

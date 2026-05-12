@@ -10,6 +10,10 @@ from pathlib import Path
 from g_market_azeroth.services.parsers.base import ParsedProduct, ParserError
 
 LOGGER = logging.getLogger(__name__)
+SOURCE_TYPE_TO_REALM_TYPE = {
+    "official": "off",
+    "private": "pirate",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +88,12 @@ def _row_to_product(row: sqlite3.Row) -> ParsedProduct:
 
     external_id = _external_id(row)
     source_type = _required_text(row["source_type"], "source_type")
+    realm_type = SOURCE_TYPE_TO_REALM_TYPE.get(source_type)
+    if realm_type is None:
+        raise ValueError("source_type is not supported")
+
     return ParsedProduct(
+        realm_type=realm_type,
         server=server,
         faction=faction,
         price_per_1000=price_per_1000,
