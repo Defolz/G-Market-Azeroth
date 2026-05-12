@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 
+from g_market_azeroth.admin import is_admin_user
 from g_market_azeroth.catalog import (
     REALM_TYPE_LABELS,
     is_valid_realm_type,
@@ -55,19 +56,24 @@ class SupportFlow(StatesGroup):
 
 
 @router.message(CommandStart())
-async def handle_start(message: Message, database: MarketRepository, state: FSMContext) -> None:
+async def handle_start(
+    message: Message,
+    database: MarketRepository,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
     await state.clear()
     if message.from_user:
         await _save_client(message.from_user, database)
         log_metric("registration", user_id=message.from_user.id)
 
-    await message.answer(WELCOME_TEXT, reply_markup=main_menu_keyboard())
+    await message.answer(WELCOME_TEXT, reply_markup=main_menu_keyboard(settings, message.from_user))
 
 
 @router.message(Command("menu"))
-async def handle_menu(message: Message, state: FSMContext) -> None:
+async def handle_menu(message: Message, settings: Settings, state: FSMContext) -> None:
     await state.clear()
-    await message.answer("Главное меню:", reply_markup=main_menu_keyboard())
+    await message.answer("Главное меню:", reply_markup=main_menu_keyboard(settings, message.from_user))
 
 
 @router.message(Command("support"))
@@ -80,21 +86,25 @@ async def handle_support_command(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Command("my_requests"))
-async def handle_my_requests_command(message: Message, database: MarketRepository) -> None:
+async def handle_my_requests_command(
+    message: Message,
+    database: MarketRepository,
+    settings: Settings,
+) -> None:
     if not message.from_user:
         return
 
     await message.answer(
         await _my_requests_text(database, message.from_user.id),
-        reply_markup=main_menu_keyboard(),
+        reply_markup=main_menu_keyboard(settings, message.from_user),
     )
 
 
 @router.callback_query(F.data == "shop:home")
-async def handle_shop_home(callback: CallbackQuery, state: FSMContext) -> None:
+async def handle_shop_home(callback: CallbackQuery, settings: Settings, state: FSMContext) -> None:
     await state.clear()
     if isinstance(callback.message, Message):
-        await callback.message.edit_text("Главное меню:", reply_markup=main_menu_keyboard())
+        await callback.message.edit_text("Главное меню:", reply_markup=main_menu_keyboard(settings, callback.from_user))
     await callback.answer()
 
 
@@ -126,10 +136,14 @@ async def handle_support(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "shop:my_requests")
-async def handle_my_requests(callback: CallbackQuery, database: MarketRepository) -> None:
+async def handle_my_requests(
+    callback: CallbackQuery,
+    database: MarketRepository,
+    settings: Settings,
+) -> None:
     text = await _my_requests_text(database, callback.from_user.id)
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(text, reply_markup=main_menu_keyboard())
+        await callback.message.edit_text(text, reply_markup=main_menu_keyboard(settings, callback.from_user))
     await callback.answer()
 
 
@@ -247,7 +261,7 @@ async def handle_purchase(
             "Заявка на покупку создана.\n\n"
             f"Номер заявки: #{request.id}\n"
             "Администратор увидит её и свяжется с вами.",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=main_menu_keyboard(settings, callback.from_user),
         )
     await callback.answer("Заявка создана.")
 
@@ -367,7 +381,7 @@ async def handle_sell_comment(
         "Заявка на продажу создана.\n\n"
         f"Номер заявки: #{sell_request.id}\n"
         "Администратор проверит данные и свяжется с вами.",
-        reply_markup=main_menu_keyboard(),
+        reply_markup=main_menu_keyboard(settings, message.from_user),
     )
 
 
@@ -408,22 +422,27 @@ async def handle_support_question(
     await message.answer(
         "Вопрос отправлен в поддержку.\n\n"
         f"Номер обращения: #{ticket.id}",
-        reply_markup=main_menu_keyboard(),
+        reply_markup=main_menu_keyboard(settings, message.from_user),
     )
 
 
-def main_menu_keyboard() -> InlineKeyboardMarkup:
+def main_menu_keyboard(settings: Settings, user: User | None) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="Купить", callback_data="shop:buy"),
+            InlineKeyboardButton(text="Продать", callback_data="shop:sell"),
+        ],
+        [
+            InlineKeyboardButton(text="Мои заявки", callback_data="shop:my_requests"),
+            InlineKeyboardButton(text="Поддержка", callback_data="shop:support"),
+        ],
+    ]
+    user_id = user.id if user else None
+    if is_admin_user(user_id, settings):
+        rows.append([InlineKeyboardButton(text="⚙️ Админка", callback_data="admin:home")])
+
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Купить", callback_data="shop:buy"),
-                InlineKeyboardButton(text="Продать", callback_data="shop:sell"),
-            ],
-            [
-                InlineKeyboardButton(text="Мои заявки", callback_data="shop:my_requests"),
-                InlineKeyboardButton(text="Поддержка", callback_data="shop:support"),
-            ],
-        ]
+        inline_keyboard=rows
     )
 
 

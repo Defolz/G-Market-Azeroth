@@ -1,0 +1,43 @@
+from aiogram.types import User
+
+from g_market_azeroth.config import Settings
+from g_market_azeroth.handlers import main_menu_keyboard
+
+
+def make_settings(*, admin_ids: set[int]) -> Settings:
+    return Settings(
+        bot_token="123456:test-token",
+        admin_ids=admin_ids,
+        database_path=":memory:",
+        log_level="INFO",
+        message_cooldown_seconds=1.0,
+        callback_cooldown_seconds=0.5,
+        support_cooldown_seconds=10.0,
+    )
+
+
+def keyboard_buttons(settings: Settings, user: User) -> list[tuple[str, str]]:
+    keyboard = main_menu_keyboard(settings, user)
+    return [
+        (button.text, button.callback_data or "")
+        for row in keyboard.inline_keyboard
+        for button in row
+    ]
+
+
+def test_main_menu_hides_admin_entry_for_regular_user() -> None:
+    buttons = keyboard_buttons(
+        make_settings(admin_ids={1001}),
+        User(id=2002, is_bot=False, first_name="Client"),
+    )
+
+    assert ("⚙️ Админка", "admin:home") not in buttons
+
+
+def test_main_menu_shows_admin_entry_for_admin_user() -> None:
+    buttons = keyboard_buttons(
+        make_settings(admin_ids={1001}),
+        User(id=1001, is_bot=False, first_name="Admin"),
+    )
+
+    assert ("⚙️ Админка", "admin:home") in buttons

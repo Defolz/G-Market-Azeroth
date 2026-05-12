@@ -55,6 +55,10 @@ class AnswerSupportTicket(StatesGroup):
     waiting_for_answer = State()
 
 
+def is_admin_user(user_id: int | None, settings: Settings) -> bool:
+    return user_id is not None and user_id in settings.admin_ids
+
+
 def admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -860,7 +864,8 @@ async def _ensure_admin_message(message: Message, settings: Settings) -> bool:
         await message.answer("Админка не настроена. Добавьте ADMIN_IDS в .env.")
         return False
 
-    if not message.from_user or message.from_user.id not in settings.admin_ids:
+    user_id = message.from_user.id if message.from_user else None
+    if not is_admin_user(user_id, settings):
         await message.answer("Эта команда доступна только администратору.")
         return False
 
@@ -872,7 +877,8 @@ async def _ensure_admin_callback(callback: CallbackQuery, settings: Settings) ->
         await callback.answer("Админка не настроена.", show_alert=True)
         return False
 
-    if not callback.from_user or callback.from_user.id not in settings.admin_ids:
+    user_id = callback.from_user.id if callback.from_user else None
+    if not is_admin_user(user_id, settings):
         await callback.answer("Нет доступа.", show_alert=True)
         return False
 
